@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DotA 3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Forum&family=Fira+Sans+Condensed:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<!-- @@BODY_START@@ -->
+<div id="app">
+  <canvas id="game" aria-label="Поле боя"></canvas>
+
+  <div id="hud" hidden>
+    <div id="topbar">
+      <div class="score radiant"><span id="score-r">0</span><small>Свет</small></div>
+      <div class="clock"><span id="clock">-0:20</span><small id="clock-sub">до горна</small></div>
+      <div class="score dire"><small>Тьма</small><span id="score-d">0</span></div>
+    </div>
+    <div id="topright">
+      <button id="btn-sound" class="chip" type="button" title="Звук (M)">Звук</button>
+      <button id="btn-score" class="chip" type="button" title="Счёт (Tab)">Счёт</button>
+      <button id="btn-menu" class="chip" type="button" title="Меню (Esc)">Меню</button>
+    </div>
+    <div id="killfeed" aria-live="polite"></div>
+    <div id="announce"></div>
+    <div id="toast"></div>
+    <div id="respawn" hidden>Возрождение через <b id="respawn-t">0</b></div>
+    <div id="courier" hidden></div>
+
+    <div id="minimap-wrap"><canvas id="minimap" aria-label="Миникарта"></canvas></div>
+
+    <div id="bottom">
+      <div id="portrait-wrap" title="Центрировать камеру (Пробел)">
+        <canvas id="portrait" width="176" height="176"></canvas>
+        <div id="lvl">1</div>
+        <div id="xpbar"><i></i></div>
+      </div>
+      <div id="center">
+        <div id="hero-line"><span id="hero-name"></span><span id="skill-hint" hidden>Очки навыков: <b id="skill-pts">1</b></span></div>
+        <div id="abilities"></div>
+        <div id="bars">
+          <div class="bar hp" id="bar-hp"><i></i><span></span><em></em></div>
+          <div class="bar mp" id="bar-mp"><i></i><span></span><em></em></div>
+        </div>
+      </div>
+      <div id="items"></div>
+      <div id="side">
+        <dl id="stats">
+          <div><dt>Урон</dt><dd id="st-dmg">0</dd></div>
+          <div><dt>Броня</dt><dd id="st-arm">0</dd></div>
+          <div><dt>Атак/с</dt><dd id="st-as">0</dd></div>
+          <div><dt>Скорость</dt><dd id="st-ms">0</dd></div>
+        </dl>
+        <button id="gold-btn" type="button" title="Лавка (B)"><span class="coin"></span><b id="gold">0</b><small>Лавка</small></button>
+      </div>
+    </div>
+
+    <div id="touchbar">
+      <button id="tb-center" class="chip" type="button">К герою</button>
+      <button id="tb-stop" class="chip" type="button">Стоп</button>
+      <button id="tb-amove" class="chip" type="button">Атака</button>
+    </div>
+
+    <aside id="shop" hidden>
+      <header>
+        <h2>Лавка</h2>
+        <div class="shop-gold"><span class="coin"></span><b id="shop-gold">0</b></div>
+        <button id="shop-close" class="x" type="button" aria-label="Закрыть лавку">×</button>
+      </header>
+      <p id="shop-status"></p>
+      <div id="shop-list"></div>
+      <div id="shop-detail"></div>
+    </aside>
+
+    <div id="scoreboard" hidden></div>
+    <div id="tooltip" hidden></div>
+  </div>
+
+  <div id="menu" class="screen">
+    <div class="menu-card">
+      <header class="brand">
+        <h1>DotA <span>3</span></h1>
+        <p>Свет против Тьмы. Пять героев с каждой стороны, три линии и один Древний, которого нужно разрушить.</p>
+      </header>
+      <section class="pick">
+        <h2>Герой</h2>
+        <div id="hero-grid" role="listbox" aria-label="Выбор героя"></div>
+        <div id="hero-detail"></div>
+      </section>
+      <section class="opts">
+        <div class="opt">
+          <span class="opt-label">Сторона</span>
+          <div class="seg" id="team-seg">
+            <button type="button" data-v="0" class="on">Свет</button>
+            <button type="button" data-v="1">Тьма</button>
+          </div>
+        </div>
+        <div class="opt">
+          <span class="opt-label">Боты врага</span>
+          <div class="seg" id="diff-seg">
+            <button type="button" data-v="easy">Лёгкие</button>
+            <button type="button" data-v="normal" class="on">Обычные</button>
+            <button type="button" data-v="hard">Сложные</button>
+          </div>
+        </div>
+        <button id="start-btn" class="primary" type="button">В бой</button>
+      </section>
+      <details class="controls">
+        <summary>Управление</summary>
+        <div class="controls-grid">
+          <div><kbd>ПКМ</kbd> идти или атаковать</div>
+          <div><kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd><kbd>R</kbd> способности</div>
+          <div><kbd>Shift</kbd>+<kbd>Q…R</kbd> или «+» — изучить способность</div>
+          <div><kbd>1</kbd>–<kbd>6</kbd> предметы</div>
+          <div><kbd>A</kbd> атака с движением, <kbd>S</kbd> стоп</div>
+          <div><kbd>B</kbd> лавка, <kbd>Tab</kbd> счёт</div>
+          <div><kbd>Пробел</kbd> камера к герою, <kbd>Y</kbd> закрепить камеру</div>
+          <div>Колесо мыши — масштаб, края экрана и стрелки — обзор</div>
+          <div>На телефоне: касание — приказ, жест пальцем — обзор</div>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div id="pause" class="screen" hidden>
+    <div class="menu-card small">
+      <h2>Пауза</h2>
+      <div class="stack">
+        <button id="resume-btn" class="primary" type="button">Продолжить</button>
+        <button id="quit-btn" type="button">Выйти в меню</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="end" class="screen" hidden>
+    <div class="menu-card wide">
+      <h2 id="end-title">Победа</h2>
+      <p id="end-sub"></p>
+      <div id="end-table"></div>
+      <div class="row">
+        <button id="again-btn" class="primary" type="button">Ещё матч</button>
+        <button id="end-menu-btn" type="button">В меню</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="js/util.js"></script>
+<script src="js/data.js"></script>
+<script src="js/map.js"></script>
+<script src="js/entities.js"></script>
+<script src="js/abilities.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/game.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/render.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/input.js"></script>
+<script src="js/main.js"></script>
+<!-- @@BODY_END@@ -->
+</body>
+</html>
