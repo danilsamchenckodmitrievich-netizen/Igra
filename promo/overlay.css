@@ -1,0 +1,40 @@
+/* Титры рекламного ролика поверх настоящей игры: тёмное дерево, пергамент и золото, как в интерфейсе. */
+body.promo #mm-toggle, body.promo #minimap-wrap, body.promo #hint, body.promo #toast { display: none !important; }
+body.promo #left { display: none; }
+body.promo.promo-feed #left { display: block; top: auto; bottom: 120px; }
+body.promo.promo-feed #coach { display: none; }
+body.promo-nohud #topbar, body.promo-nohud #panel { visibility: hidden; }
+body.promo * { transition: none !important; animation: none !important; }
+
+#promo { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; z-index: 50; font-family: var(--font-head); }
+#promo .pr-layer { position: absolute; left: 0; top: 0; right: 0; bottom: 0; }
+
+#pr-shade { background: radial-gradient(120% 80% at 50% 45%, rgba(20, 13, 6, 0.55), rgba(10, 6, 3, 0.95)); opacity: 1; }
+#pr-black { background: #000; opacity: 0; }
+#pr-flash { background: radial-gradient(70% 50% at 50% 50%, #fff4d2, rgba(255, 220, 150, 0.4)); opacity: 0; mix-blend-mode: screen; }
+
+#pr-title { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 0 24px; text-align: center; transform-origin: 50% 46%; }
+#pr-crest { width: 132px; height: 132px; filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.6)); }
+#pr-logo { margin: 8px 0 0; font-family: var(--font-logo); font-weight: 400; font-size: 66px; line-height: 1.04; letter-spacing: 1px;
+  color: var(--gold-hi); text-shadow: 0 3px 0 #5a3410, 0 0 28px rgba(243, 213, 138, 0.35); }
+#pr-logo .w { display: block; white-space: nowrap; }
+#pr-logo .w span { display: inline-block; }
+#pr-sub { margin: 4px 0 0; font-family: var(--font-ui); font-size: 21px; letter-spacing: 3px; text-transform: uppercase; color: #ead9b0; }
+
+#pr-cap { position: absolute; left: 0; right: 0; top: 92px; display: none; flex-direction: column; align-items: flex-start; gap: 6px; padding: 18px 24px 34px;
+  background: linear-gradient(180deg, rgba(22, 14, 7, 0.82) 0%, rgba(22, 14, 7, 0.62) 62%, rgba(22, 14, 7, 0) 100%); }
+body.promo-nohud #pr-cap { top: 40px; }
+#pr-kick { font-family: var(--font-ui); font-weight: 700; font-size: 17px; letter-spacing: 4px; text-transform: uppercase; color: var(--gold); }
+#pr-line { font-weight: 400; font-size: 36px; line-height: 1.08; color: #fbf1d8; text-shadow: 0 2px 0 rgba(0, 0, 0, 0.5); max-width: 14em; text-wrap: balance; }
+#pr-rule { display: block; width: 120px; height: 3px; border-radius: 2px; background: linear-gradient(90deg, var(--gold-hi), rgba(215, 169, 68, 0)); transform-origin: 0 50%; }
+
+#pr-end { display: none; align-items: center; justify-content: center; padding: 0 28px; }
+.pr-card { width: 100%; max-width: 420px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 30px 26px 28px;
+  background: linear-gradient(180deg, var(--paper), var(--paper-2)); border: 3px solid var(--wood-line); border-radius: 18px;
+  box-shadow: 0 0 0 6px rgba(43, 30, 18, 0.85), 0 30px 60px rgba(0, 0, 0, 0.55); }
+.pr-card img { width: 112px; height: 112px; margin-top: -86px; filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.45)); }
+.pr-name { margin: 6px 0 0; font-family: var(--font-logo); font-weight: 400; font-size: 44px; line-height: 1.02; color: #5a1d12; text-shadow: 0 2px 0 rgba(255, 240, 200, 0.8); }
+.pr-what { margin: 0; font-size: 21px; color: var(--ink-soft); }
+.pr-btn { margin-top: 14px; padding: 14px 34px; border-radius: 12px; font-family: var(--font-ui); font-weight: 700; font-size: 25px; letter-spacing: 0.5px; color: #2a1b0d;
+  background: linear-gradient(180deg, var(--gold-hi), var(--gold)); border: 2px solid #8a6420; box-shadow: 0 4px 0 #6d4c14, 0 10px 22px rgba(90, 60, 10, 0.35); }
+.pr-small { margin: 8px 0 0; font-family: var(--font-ui); font-size: 17px; letter-spacing: 1px; color: var(--ink-soft); }
