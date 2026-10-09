@@ -1,0 +1,49 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Номер сборки берётся из GitHub Actions, чтобы каждая новая версия ставилась поверх старой.
+def buildNumber = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as int
+
+android {
+    namespace 'com.igra.korona'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.igra.korona'
+        minSdk 24
+        targetSdk 34
+        versionCode buildNumber
+        versionName "1.0.${buildNumber}"
+    }
+
+    // Общий ключ подписи лежит в репозитории: так обновления ставятся поверх друг друга.
+    // Подходит для установки на свои устройства, но не для публикации в магазине.
+    signingConfigs {
+        shared {
+            storeFile file('korona.keystore')
+            storePassword 'korona123'
+            keyAlias 'korona'
+            keyPassword 'korona123'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.shared
+        }
+        debug {
+            signingConfig signingConfigs.shared
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.11.0'
+}

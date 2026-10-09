@@ -1,35 +1,11 @@
 'use strict';
-// Общие математические помощники.
+// Общие помощники: математика, детерминированный генератор, шум, куча.
 
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;
+const dist = (ax, ay, bx, by) => Math.hypot(bx - ax, by - ay);
 
-function dist(ax, ay, bx, by) {
-  const dx = bx - ax, dy = by - ay;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-function distSq(ax, ay, bx, by) {
-  const dx = bx - ax, dy = by - ay;
-  return dx * dx + dy * dy;
-}
-const distU = (a, b) => dist(a.x, a.y, b.x, b.y);
-// Расстояние между краями двух юнитов.
-const gapU = (a, b) => distU(a, b) - a.radius - b.radius;
-const angleTo = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
-
-const rand = (a, b) => a + Math.random() * (b - a);
-const randInt = (a, b) => Math.floor(a + Math.random() * (b - a + 1));
-const choice = arr => arr[Math.floor(Math.random() * arr.length)];
-function shuffle(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
-  }
-  return arr;
-}
-
-// Детерминированный генератор для карты.
 function mulberry32(a) {
   return function () {
     a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -39,77 +15,49 @@ function mulberry32(a) {
   };
 }
 
+// Генератор с удобными методами; вся случайность игры идёт через него, чтобы сохранения были воспроизводимы.
+class Rng {
+  constructor(seed) { this.state = seed >>> 0; }
+  next() {
+    this.state = (this.state + 0x6D2B79F5) >>> 0;
+    let t = this.state;
+    t = Math.imul(t ^ (t >>> 15), 1 | t);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  range(a, b) { return a + this.next() * (b - a); }
+  int(a, b) { return Math.floor(a + this.next() * (b - a + 1)); }
+  pick(arr) { return arr[Math.floor(this.next() * arr.length)]; }
+  chance(p) { return this.next() < p; }
+  shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(this.next() * (i + 1));
+      const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+    }
+    return arr;
+  }
+}
+
 function makeNoise(seed) {
   const rng = mulberry32(seed);
-  const S = 64, vals = new Float32Array(S * S);
+  const S = 128, vals = new Float32Array(S * S);
   for (let i = 0; i < vals.length; i++) vals[i] = rng();
-  const v = (i, j) => vals[(j & 63) * S + (i & 63)];
+  const v = (i, j) => vals[(j & 127) * S + (i & 127)];
   const sm = t => t * t * (3 - 2 * t);
-  function n(x, y) {
+  return function (x, y) {
     const xi = Math.floor(x), yi = Math.floor(y);
     const tx = sm(x - xi), ty = sm(y - yi);
     return lerp(lerp(v(xi, yi), v(xi + 1, yi), tx), lerp(v(xi, yi + 1), v(xi + 1, yi + 1), tx), ty);
+  };
+}
+function fractal(noise, x, y, octaves) {
+  let sum = 0, amp = 1, freq = 1, norm = 0;
+  for (let o = 0; o < octaves; o++) {
+    sum += noise(x * freq + o * 17.3, y * freq + o * 9.1) * amp;
+    norm += amp; amp *= 0.5; freq *= 2.03;
   }
-  return (x, y) => n(x, y) * 0.65 + n(x * 2.3 + 17, y * 2.3 + 9) * 0.35;
+  return sum / norm;
 }
-
-function distToSegment(px, py, ax, ay, bx, by) {
-  const dx = bx - ax, dy = by - ay;
-  const l2 = dx * dx + dy * dy;
-  let t = l2 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0;
-  t = clamp(t, 0, 1);
-  return dist(px, py, ax + dx * t, ay + dy * t);
-}
-function distToPolyline(px, py, pts) {
-  let best = Infinity;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const d = distToSegment(px, py, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y);
-    if (d < best) best = d;
-  }
-  return best;
-}
-function polylineLength(pts) {
-  let l = 0;
-  for (let i = 0; i < pts.length - 1; i++) l += dist(pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y);
-  return l;
-}
-function pointAlong(pts, d) {
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i], b = pts[i + 1];
-    const l = dist(a.x, a.y, b.x, b.y);
-    if (d <= l) return { x: lerp(a.x, b.x, d / l), y: lerp(a.y, b.y, d / l) };
-    d -= l;
-  }
-  const last = pts[pts.length - 1];
-  return { x: last.x, y: last.y };
-}
-// Насколько далеко вдоль ломаной находится проекция точки.
-function projectOnPolyline(pts, px, py) {
-  let best = Infinity, bestAlong = 0, acc = 0;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i], b = pts[i + 1];
-    const dx = b.x - a.x, dy = b.y - a.y;
-    const l2 = dx * dx + dy * dy, l = Math.sqrt(l2);
-    const t = clamp(((px - a.x) * dx + (py - a.y) * dy) / l2, 0, 1);
-    const d = dist(px, py, a.x + dx * t, a.y + dy * t);
-    if (d < best) { best = d; bestAlong = acc + l * t; }
-    acc += l;
-  }
-  return { along: bestAlong, off: best };
-}
-
-function fmtTime(t) {
-  const neg = t < 0;
-  const s = neg ? Math.ceil(-t) : Math.floor(t);
-  return (neg ? '-' : '') + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
-}
-
-function armorMult(a) {
-  return 1 - (0.06 * a) / (1 + 0.06 * Math.abs(a));
-}
-
-// Значение способности для уровня: массив по уровням или число.
-const LV = (v, lv) => (Array.isArray(v) ? v[clamp(lv, 1, v.length) - 1] : v);
 
 class MinHeap {
   constructor() { this.items = []; this.pri = []; }
@@ -134,7 +82,7 @@ class MinHeap {
     const n = it.length;
     if (n > 0) {
       let i = 0;
-      while (true) {
+      for (;;) {
         let c = 2 * i + 1;
         if (c >= n) break;
         if (c + 1 < n && pr[c + 1] < pr[c]) c++;
@@ -150,4 +98,31 @@ class MinHeap {
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function fmtInt(n) { return Math.floor(n).toLocaleString('ru-RU'); }
+function fmtRate(n) {
+  const r = Math.round(n);
+  return (r > 0 ? '+' : r < 0 ? '−' : '±') + Math.abs(r);
+}
+function plural(n, one, few, many) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b > 1 && b < 5) return few;
+  if (b === 1) return one;
+  return many;
+}
+function bytesToB64(u8) {
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function b64ToBytes(b64) {
+  const s = atob(b64);
+  const u8 = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
+  return u8;
+}
+function fmtTime(t) {
+  const s = Math.max(0, Math.ceil(t));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }

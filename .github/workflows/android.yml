@@ -1,0 +1,98 @@
+name: Android APK
+
+on:
+  push:
+    paths:
+      - 'index.html'
+      - 'css/**'
+      - 'js/**'
+      - 'fonts/**'
+      - 'icon.png'
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Положить игру в assets
+        run: |
+          mkdir -p android/app/src/main/assets/www
+          cp -r index.html icon.png css js fonts android/app/src/main/assets/www/
+
+      - name: Собрать APK
+        working-directory: android
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Переименовать APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk zheleznaya-korona.apk
+
+      - name: Включить KVM для эмулятора
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Проверить запуск в эмуляторе Android 11
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: |
+            adb install -r zheleznaya-korona.apk
+            adb logcat -c
+            adb shell am start -W -n com.igra.korona/.MainActivity
+            sleep 45
+            adb logcat -d -s Korona:I > logcat.txt || true
+            cat logcat.txt
+            adb exec-out screencap -p > emulator.png
+            grep -q "korona-frames-ok" logcat.txt
+            ! grep -E "ERROR|Uncaught" logcat.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zheleznaya-korona
+          path: |
+            zheleznaya-korona.apk
+            emulator.png
+            logcat.txt
+          if-no-files-found: ignore
+
+      - name: Опубликовать релиз
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: korona-v1.0.${{ github.run_number }}
+          name: Железная корона 1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          body: |
+            Скачайте `zheleznaya-korona.apk` на телефон и откройте файл. Android попросит разрешить установку из этого источника — разрешите.
+            Новые версии ставятся поверх старых, сохранения не теряются.
+            Сборка проверена запуском в эмуляторе Android 11 (снимок экрана — `emulator.png`).
+          files: |
+            zheleznaya-korona.apk
+            emulator.png

@@ -2,148 +2,140 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>DotA 3</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Forum&family=Fira+Sans+Condensed:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="css/style.css">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#2a1d11">
+<title>Железная корона</title>
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="fonts/fonts.css">
+<link rel="stylesheet" href="css/game.css">
 </head>
 <body>
 <!-- @@BODY_START@@ -->
 <div id="app">
-  <canvas id="game" aria-label="Поле боя"></canvas>
+  <canvas id="map" aria-label="Карта мира"></canvas>
 
   <div id="hud" hidden>
-    <div id="topbar">
-      <div class="score radiant"><span id="score-r">0</span><small>Свет</small></div>
-      <div class="clock"><span id="clock">-0:20</span><small id="clock-sub">до горна</small></div>
-      <div class="score dire"><small>Тьма</small><span id="score-d">0</span></div>
+    <header id="topbar">
+      <button id="kingdom-btn" type="button" title="Держава"><span id="k-crest"></span><span id="k-name"></span></button>
+      <div id="resbar"></div>
+      <div id="clock"><span id="date"></span><small id="grace"></small></div>
+      <div id="speed" role="group" aria-label="Скорость игры">
+        <button type="button" data-speed="0" title="Пауза (пробел)"></button>
+        <button type="button" data-speed="1" title="Обычная скорость (1)">1×</button>
+        <button type="button" data-speed="2" title="Быстрее (2)">2×</button>
+        <button type="button" data-speed="3" title="Ещё быстрее (3)">3×</button>
+      </div>
+      <button id="menu-btn" type="button" title="Меню" aria-label="Меню"></button>
+    </header>
+    <div id="left">
+      <div id="coach" hidden><p id="coach-text"></p><div class="coach-row"><button id="coach-skip" type="button">Пропустить обучение</button><button id="coach-ok" type="button" hidden>Понятно</button></div></div>
+      <div id="feed" aria-live="polite"></div>
     </div>
-    <div id="topright">
-      <button id="btn-sound" class="chip" type="button" title="Звук (M)">Звук</button>
-      <button id="btn-score" class="chip" type="button" title="Счёт (Tab)">Счёт</button>
-      <button id="btn-menu" class="chip" type="button" title="Меню (Esc)">Меню</button>
-    </div>
-    <div id="killfeed" aria-live="polite"></div>
-    <div id="announce"></div>
-    <div id="toast"></div>
-    <div id="respawn" hidden>Возрождение через <b id="respawn-t">0</b></div>
-    <div id="courier" hidden></div>
-
     <div id="minimap-wrap"><canvas id="minimap" aria-label="Миникарта"></canvas></div>
-
-    <div id="bottom">
-      <div id="portrait-wrap" title="Центрировать камеру (Пробел)">
-        <canvas id="portrait" width="176" height="176"></canvas>
-        <div id="lvl">1</div>
-        <div id="xpbar"><i></i></div>
-      </div>
-      <div id="center">
-        <div id="hero-line"><span id="hero-name"></span><span id="skill-hint" hidden>Очки навыков: <b id="skill-pts">1</b></span></div>
-        <div id="abilities"></div>
-        <div id="bars">
-          <div class="bar hp" id="bar-hp"><i></i><span></span><em></em></div>
-          <div class="bar mp" id="bar-mp"><i></i><span></span><em></em></div>
-        </div>
-      </div>
-      <div id="items"></div>
-      <div id="side">
-        <dl id="stats">
-          <div><dt>Урон</dt><dd id="st-dmg">0</dd></div>
-          <div><dt>Броня</dt><dd id="st-arm">0</dd></div>
-          <div><dt>Атак/с</dt><dd id="st-as">0</dd></div>
-          <div><dt>Скорость</dt><dd id="st-ms">0</dd></div>
-        </dl>
-        <button id="gold-btn" type="button" title="Лавка (B)"><span class="coin"></span><b id="gold">0</b><small>Лавка</small></button>
-      </div>
-    </div>
-
-    <div id="touchbar">
-      <button id="tb-center" class="chip" type="button">К герою</button>
-      <button id="tb-stop" class="chip" type="button">Стоп</button>
-      <button id="tb-amove" class="chip" type="button">Атака</button>
-    </div>
-
-    <aside id="shop" hidden>
-      <header>
-        <h2>Лавка</h2>
-        <div class="shop-gold"><span class="coin"></span><b id="shop-gold">0</b></div>
-        <button id="shop-close" class="x" type="button" aria-label="Закрыть лавку">×</button>
-      </header>
-      <p id="shop-status"></p>
-      <div id="shop-list"></div>
-      <div id="shop-detail"></div>
+    <button id="mm-toggle" type="button" aria-label="Показать или скрыть миникарту"></button>
+    <aside id="panel" hidden>
+      <button id="panel-close" type="button" aria-label="Закрыть"></button>
+      <div id="panel-body"></div>
     </aside>
-
-    <div id="scoreboard" hidden></div>
-    <div id="tooltip" hidden></div>
+    <div id="hint" hidden></div>
+    <div id="toast"></div>
   </div>
 
   <div id="menu" class="screen">
-    <div class="menu-card">
-      <header class="brand">
-        <h1>DotA <span>3</span></h1>
-        <p>Свет против Тьмы. Пять героев с каждой стороны, три линии и один Древний, которого нужно разрушить.</p>
-      </header>
-      <section class="pick">
-        <h2>Герой</h2>
-        <div id="hero-grid" role="listbox" aria-label="Выбор героя"></div>
-        <div id="hero-detail"></div>
-      </section>
-      <section class="opts">
-        <div class="opt">
-          <span class="opt-label">Сторона</span>
-          <div class="seg" id="team-seg">
-            <button type="button" data-v="0" class="on">Свет</button>
-            <button type="button" data-v="1">Тьма</button>
-          </div>
+    <div class="sheet title-sheet">
+      <h1 class="logo">Железная корона</h1>
+      <p class="tagline">Средневековая стратегия на открытой карте. Правьте державой, стройте мануфактуры, собирайте войска, укрепляйте города и раздвигайте границы.</p>
+      <div class="stack">
+        <button id="continue-btn" class="btn primary" type="button" hidden>Продолжить<small id="continue-info"></small></button>
+        <button id="new-btn" class="btn primary" type="button">Новая игра</button>
+        <button id="help-btn" class="btn" type="button">Как играть</button>
+      </div>
+      <p class="credit">Карта каждый раз создаётся заново. Игра сохраняется сама.</p>
+    </div>
+  </div>
+
+  <div id="newgame" class="screen" hidden>
+    <div class="sheet wide">
+      <h2>Новая игра</h2>
+      <div class="field">
+        <span class="label">Ваша держава</span>
+        <div id="kingdom-pick" class="kpick"></div>
+      </div>
+      <div class="fields">
+        <div class="field">
+          <span class="label">Соперники</span>
+          <div class="seg" id="rivals-seg"><button type="button" data-v="2">2</button><button type="button" data-v="3">3</button><button type="button" data-v="4">4</button><button type="button" data-v="5">5</button></div>
         </div>
-        <div class="opt">
-          <span class="opt-label">Боты врага</span>
-          <div class="seg" id="diff-seg">
-            <button type="button" data-v="easy">Лёгкие</button>
-            <button type="button" data-v="normal" class="on">Обычные</button>
-            <button type="button" data-v="hard">Сложные</button>
-          </div>
+        <div class="field">
+          <span class="label">Размер мира</span>
+          <div class="seg" id="size-seg"><button type="button" data-v="small">Малый</button><button type="button" data-v="medium">Средний</button><button type="button" data-v="large">Большой</button></div>
         </div>
-        <button id="start-btn" class="primary" type="button">В бой</button>
-      </section>
-      <details class="controls">
-        <summary>Управление</summary>
-        <div class="controls-grid">
-          <div><kbd>ПКМ</kbd> идти или атаковать</div>
-          <div><kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd><kbd>R</kbd> способности</div>
-          <div><kbd>Shift</kbd>+<kbd>Q…R</kbd> или «+» — изучить способность</div>
-          <div><kbd>1</kbd>–<kbd>6</kbd> предметы</div>
-          <div><kbd>A</kbd> атака с движением, <kbd>S</kbd> стоп</div>
-          <div><kbd>B</kbd> лавка, <kbd>Tab</kbd> счёт</div>
-          <div><kbd>Пробел</kbd> камера к герою, <kbd>Y</kbd> закрепить камеру</div>
-          <div>Колесо мыши — масштаб, края экрана и стрелки — обзор</div>
-          <div>На телефоне: касание — приказ, жест пальцем — обзор</div>
+        <div class="field">
+          <span class="label">Соперники воюют</span>
+          <div class="seg" id="diff-seg"><button type="button" data-v="easy">Мирно</button><button type="button" data-v="normal">Обычно</button><button type="button" data-v="hard">Жестоко</button></div>
         </div>
-      </details>
+        <div class="field">
+          <span class="label">Мир</span>
+          <div class="seed-row"><span id="seed-text"></span><button id="reroll-btn" class="btn small" type="button">Другой мир</button></div>
+        </div>
+      </div>
+      <div class="row">
+        <button id="back-btn" class="btn" type="button">Назад</button>
+        <button id="start-btn" class="btn primary" type="button">Начать правление</button>
+      </div>
     </div>
   </div>
 
   <div id="pause" class="screen" hidden>
-    <div class="menu-card small">
+    <div class="sheet narrow">
       <h2>Пауза</h2>
       <div class="stack">
-        <button id="resume-btn" class="primary" type="button">Продолжить</button>
-        <button id="quit-btn" type="button">Выйти в меню</button>
+        <button id="resume-btn" class="btn primary" type="button">Продолжить</button>
+        <button id="save-btn" class="btn" type="button">Сохранить</button>
+        <button id="sound-btn" class="btn" type="button">Звук: вкл.</button>
+        <button id="help2-btn" class="btn" type="button">Как играть</button>
+        <button id="quit-btn" class="btn" type="button">Выйти в меню</button>
       </div>
+      <p id="save-info" class="credit"></p>
+    </div>
+  </div>
+
+  <div id="help" class="screen" hidden>
+    <div class="sheet wide help-sheet">
+      <h2>Как играть</h2>
+      <div class="help-cols">
+        <section>
+          <h3>Цель</h3>
+          <p>Захватите больше половины городов мира или уничтожьте все державы-соперники. Если соперник захватит семь городов из десяти — вы проиграли.</p>
+          <h3>Хозяйство</h3>
+          <p>Коснитесь своего города. Во вкладке «Хозяйство» стройте фермы, лесопилки, каменоломни, рудники, рынок и мануфактуру. Выход зависит от местности вокруг города: фермам нужны равнины и реки, лесопилкам — лес, рудникам — горы. Зимой урожай вдвое меньше.</p>
+          <p>Население платит налоги и ест. Новые здания требуют свободных мест: повышайте уровень города во вкладке «Оборона».</p>
+        </section>
+        <section>
+          <h3>Войско</h3>
+          <p>Во вкладке «Войска» нанимайте отряды. Кнопкой «Вывести войско» соберите армию из гарнизона.</p>
+          <p>Выберите армию касанием, затем коснитесь цели: земли — идти, чужого города — осаждать, своего города — войти в гарнизон, вражеской армии — атаковать.</p>
+          <p>Копья бьют конницу, конница — стрелков, стрелки — пехоту. Тараны и катапульты рушат стены. Армия с низким боевым духом бежит с поля боя.</p>
+        </section>
+        <section>
+          <h3>Оборона</h3>
+          <p>Стены защищают гарнизон, башни стреляют по осаждающим. При осаде горожане берутся за оружие. Пока стены целы, а в гарнизоне есть воины, город не взять.</p>
+          <h3>Управление</h3>
+          <p>Палец или мышь — двигать карту, щипок или колесо — масштаб. Пробел — пауза, 1–3 — скорость, Esc — снять выбор. На рынке во вкладке державы можно продать излишки и купить железо.</p>
+        </section>
+      </div>
+      <div class="row"><button id="help-close" class="btn primary" type="button">Понятно</button></div>
     </div>
   </div>
 
   <div id="end" class="screen" hidden>
-    <div class="menu-card wide">
-      <h2 id="end-title">Победа</h2>
-      <p id="end-sub"></p>
+    <div class="sheet wide">
+      <h2 id="end-title"></h2>
+      <p id="end-sub" class="tagline"></p>
       <div id="end-table"></div>
       <div class="row">
-        <button id="again-btn" class="primary" type="button">Ещё матч</button>
-        <button id="end-menu-btn" type="button">В меню</button>
+        <button id="end-menu" class="btn" type="button">В меню</button>
+        <button id="end-new" class="btn primary" type="button">Новая игра</button>
       </div>
     </div>
   </div>
@@ -151,11 +143,9 @@
 
 <script src="js/util.js"></script>
 <script src="js/data.js"></script>
-<script src="js/map.js"></script>
-<script src="js/entities.js"></script>
-<script src="js/abilities.js"></script>
-<script src="js/ai.js"></script>
+<script src="js/world.js"></script>
 <script src="js/game.js"></script>
+<script src="js/ai.js"></script>
 <script src="js/icons.js"></script>
 <script src="js/render.js"></script>
 <script src="js/audio.js"></script>

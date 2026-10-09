@@ -1,419 +1,250 @@
 'use strict';
-// Поведение крипов, башен, нейтралов и ботов-героев.
+// ИИ соперничающих держав: хозяйство, найм, оборона, захват вольных и вражеских городов.
 
-function creepThink(dt) {
-  const g = this.game;
-  const o = this.order;
-  if (o && o.type === 'attack' && !this.canAttack(o.target)) { this.order = null; this.thinkT = 0; }
-  this.thinkT -= dt;
-  if (this.thinkT > 0) return;
-  this.thinkT = 0.28 + Math.random() * 0.12;
-  const ft = this.forceTarget;
-  if (ft && g.time < this.forceUntil && this.canAttack(ft) && distU(this, ft) < 900) {
-    if (!o || o.target !== ft) this.order = { type: 'attack', target: ft };
-    return;
-  }
-  this.forceTarget = null;
-  const off = projectOnPolyline(this.lanePts, this.x, this.y).off;
-  const cur = o && o.type === 'attack' ? o.target : null;
-  if (cur && this.canAttack(cur) && !cur.isBuilding && gapU(this, cur) < 600 && (cur.kind !== 'hero' || off < 420)) {
-    if (cur.kind !== 'hero') return;
-    const alt = this.findTarget(420, { noNeutral: true, noBuilding: true, noHero: true });
-    if (!alt) return;
-  }
-  let t = this.findTarget(520, { noNeutral: true, noBuilding: true, noHero: true });
-  if (!t && off < 420) t = this.findTarget(480, { noNeutral: true, noBuilding: true });
-  if (!t) t = this.findTarget(650, { onlyBuilding: true });
-  if (t) {
-    if (t !== cur) this.order = { type: 'attack', target: t };
-    return;
-  }
-  if (!o || o.type !== 'lane') {
-    const along = projectOnPolyline(this.lanePts, this.x, this.y).along;
-    let i = 1;
-    while (i < this.lanePts.length - 1 && this.laneCum[i] < along + 40) i++;
-    this.laneI = i;
-    this.order = { type: 'lane' };
-  }
-}
+const AI = {
+  update(g, dt) {
+    for (const k of g.kingdoms) {
+      if ((k.isPlayer && !g.opts.spectate) || k.bandit || !k.alive) continue;
+      k.ai.nextThink -= dt;
+      if (k.ai.nextThink > 0) continue;
+      k.ai.nextThink = g.diff.think * g.rng.range(0.8, 1.2);
+      this.think(g, k);
+    }
+  },
 
-function towerThink() {
-  const g = this.game;
-  const o = this.order;
-  let t = o && o.type === 'attack' ? o.target : null;
-  if (t && (!this.canAttack(t) || gapU(this, t) > this.s.range)) t = null;
-  const ft = this.forceTarget;
-  if (ft && g.time < this.forceUntil && this.canAttack(ft) && gapU(this, ft) <= this.s.range) t = ft;
-  if (!t) t = this.findTarget(this.s.range, { noNeutral: true });
-  if (!t) this.order = null;
-  else if (!o || o.target !== t) this.order = { type: 'attack', target: t };
-}
+  think(g, k) {
+    const cities = g.citiesOf(k.id);
+    if (!cities.length) return;
+    const inc = g.income(k).total;
+    const ctx = { cities, inc, threats: this.threats(g, k, cities) };
+    this.economy(g, k, ctx);
+    this.recruit(g, k, ctx);
+    this.military(g, k, ctx);
+  },
 
-function neutralThink() {
-  const g = this.game, home = this.home;
-  const t = this.aggro;
-  const dHome = dist(this.x, this.y, home.x, home.y);
-  if (t && this.canAttack(t) && dHome < 700 && g.time - this.aggroT < 6) {
-    if (!this.order || this.order.target !== t) this.order = { type: 'attack', target: t };
-    return;
-  }
-  this.aggro = null;
-  if (dHome > 24) {
-    if (!this.order || this.order.type !== 'move') this.order = { type: 'move', x: home.x, y: home.y, stop: 10 };
-    this.returning = true;
-  } else if (this.returning) {
-    this.returning = false;
-    this.hp = this.s.maxHp;
-    this.order = null;
-  }
-}
+  // Оценка силы обороны города.
+  cityDefense(g, c) {
+    let p = unitPower(c.garrison);
+    if (c.owner !== -1) p += Math.floor(c.pop * 0.05) * 5;
+    if (c.walls > 0) p *= 1 + WALLS[c.walls].bonus * (c.wallHp > 0 ? 1 : 0.3) + (c.wallHp > 0 ? c.wallHp / 900 : 0);
+    if (c.towers) p += TOWERS[c.towers].dps * 14;
+    return p;
+  },
 
-function bossThink(dt) {
-  const g = this.game, home = this.home;
-  this.slamT -= dt;
-  const t = this.aggro;
-  const dHome = dist(this.x, this.y, home.x, home.y);
-  if (t && this.canAttack(t) && dHome < 650 && g.time - this.aggroT < 7) {
-    if (!this.order || this.order.target !== t) this.order = { type: 'attack', target: t };
-    if (this.slamT <= 0 && enemiesInRadius(g, NEUTRAL, this.x, this.y, 270).some(u => u.team !== NEUTRAL)) {
-      this.slamT = 7;
-      for (const u of enemiesInRadius(g, NEUTRAL, this.x, this.y, 270)) {
-        dealDamage(g, this, u, 110, 'phys');
-        addBuff(u, 'golemslam', 2, { slow: 0.35, chill: true }, this);
+  threats(g, k, cities) {
+    const out = [];
+    for (const a of g.armies) {
+      if (a.owner === k.id) continue;
+      let near = null, nd = 12;
+      for (const c of cities) {
+        const d = dist(a.x, a.y, c.x + 0.5, c.y + 0.5);
+        const aimed = a.dest && a.dest.kind === 'city' && a.dest.id === c.id;
+        if ((aimed && d < 22) || d < nd) { if (!near || d < nd) { nd = d; near = c; } }
       }
-      g.fx('ring', { x: this.x, y: this.y, r0: 30, r1: 280, color: '#c0c8d4', width: 14, dur: 0.5 });
-      g.fx('cracks', { x: this.x, y: this.y, r: 270, dur: 1.2 });
-      g.burst(this.x, this.y, '#7a7f88', 24, 240, 0.8, 5, false);
-      if (g.isShown(this)) g.shake(6);
-      g.sound('boom', this);
+      if (near) out.push({ army: a, city: near, power: unitPower(a.units), d: nd });
     }
-    return;
-  }
-  this.aggro = null;
-  if (dHome > 24) {
-    if (!this.order || this.order.type !== 'move') this.order = { type: 'move', x: home.x, y: home.y, stop: 10 };
-    this.returning = true;
-  } else if (this.returning) {
-    this.returning = false;
-    this.hp = this.s.maxHp;
-    this.order = null;
-  }
-}
+    return out;
+  },
 
-function heroPower(u) {
-  return (u.hp / u.s.maxHp) * (u.level + 4) * (1 + u.netWorth / 9000);
-}
+  // ---------- хозяйство ----------
+  trade(g, k, ctx) {
+    for (const r of ['wood', 'stone', 'food']) {
+      const keep = r === 'food' ? 500 : 450;
+      if (k.res[r] > keep + 200) g.trade(k, r, Math.floor(k.res[r] - keep), true);
+    }
+    if (k.res.iron < 60 && ctx.inc.iron < 4 && k.res.gold > 450 && g.time > 300) g.trade(k, 'iron', 60, false);
+  },
 
-function autoLevel(h) {
-  let guard = 6;
-  while (h.skillPoints > 0 && guard--) {
-    if (h.canLevel(3)) { h.levelAbility(3); continue; }
-    let done = false;
-    for (const i of h.def.skillOrder) if (h.abilities[i].lv === 0 && h.canLevel(i)) { h.levelAbility(i); done = true; break; }
-    if (!done) for (const i of h.def.skillOrder) if (h.canLevel(i)) { h.levelAbility(i); done = true; break; }
-    if (!done) break;
-  }
-}
+  economy(g, k, ctx) {
+    const { inc } = ctx;
+    this.trade(g, k, ctx);
+    const armyPower = this.totalPower(g, k);
+    const wantArmy = this.wantedPower(g, k);
+    const saving = armyPower < wantArmy * 0.6 && g.time > 120;
+    for (const c of ctx.cities) {
+      if (c.construction || c.siegeBy) continue;
+      const choice = this.pickBuild(g, k, c, inc, ctx);
+      if (!choice) continue;
+      const info = g.buildInfo(c, choice.kind, choice.id);
+      if (!info || info.block) continue;
+      // при нехватке войска оставляем золото на найм
+      if (saving && choice.prio < 8 && k.res.gold - (info.cost.gold || 0) < 150) continue;
+      if (g.startBuild(c, choice.kind, choice.id) === null) inc.gold -= 0;
+    }
+  },
 
-class HeroBrain {
-  constructor(g, h, lane) {
-    this.g = g; this.h = h; this.lane = lane;
-    this.diff = g.playerTeam === h.team ? DIFFICULTY.normal : g.diff;
-    this.thinkT = Math.random() * 0.4;
-    this.state = 'lane';
-    this.buildI = 0;
-    this.focus = null;
-    this.offX = rand(-80, 80); this.offY = rand(-80, 80);
-    this.ctx = { enemyHeroes: [], allyHeroes: [], enemyCreeps: [], allyCreeps: [] };
-  }
+  pickBuild(g, k, c, inc, ctx) {
+    const opts = [];
+    const add = (kind, id, prio) => {
+      const info = g.buildInfo(c, kind, id);
+      if (!info || info.block) return;
+      opts.push({ kind, id, prio, info });
+    };
+    const lv = id => c.buildings[id] || 0;
+    const tf = id => g.terrainFactor(c, id);
+    const frontier = ctx.threats.some(t => t.city === c) || g.cities.some(o => o.owner !== k.id && o.owner !== -1 && dist(o.x, o.y, c.x, c.y) < 16);
+    if (inc.food < 15) add('building', 'farm', 10 + (lv('farm') ? 0 : 2));
+    else if (inc.food < 35) add('building', 'farm', 5);
+    if ((inc.wood < 30 || k.res.wood < 80) && tf('lumber') > 0.3) add('building', 'lumber', 8);
+    if (inc.stone < 14 && tf('quarry') > 0.35) add('building', 'quarry', 5);
+    if (inc.iron < 10 && tf('mine') > 0.3 && g.time > 60) add('building', 'mine', 6);
+    if (c.isCapital || c.level >= 3) {
+      add('building', 'barracks', lv('barracks') ? 4 : 9);
+      add('building', 'range', lv('range') ? 3 : 7);
+      if (g.time > 240) add('building', 'stable', 4);
+      if (g.time > 360) add('building', 'workshop', 4);
+    }
+    add('building', 'market', 4);
+    if (inc.wood > 25 && inc.iron > 10 && g.time > 300) add('building', 'factory', 4);
+    if (this.usedAll(g, c)) add('level', null, 6 + (c.isCapital ? 2 : 0));
+    else if (c.level < 3 && g.time > 300) add('level', null, 3);
+    if (frontier || c.isCapital) {
+      add('walls', null, frontier ? 8 : 4);
+      add('towers', null, frontier ? 6 : 3);
+    }
+    if (!opts.length) return null;
+    // самое важное из доступного по деньгам; дорогое откладываем
+    opts.sort((a, b) => b.prio - a.prio);
+    for (const o of opts) if (g.canAfford(k, o.info.cost)) return o;
+    return null;
+  },
+  usedAll(g, c) { return g.usedSlots(c) >= CITY_LEVELS[c.level].slots; },
 
-  update(dt) {
-    this.thinkT -= dt;
-    if (this.thinkT > 0) return;
-    this.thinkT = this.diff.think * rand(0.8, 1.25);
-    const h = this.h;
-    if (!h.alive) { this.state = 'lane'; this.focus = null; return; }
-    autoLevel(h);
-    this.think();
-  }
+  // ---------- войско ----------
+  totalPower(g, k) {
+    let p = 0;
+    for (const a of g.armies) if (a.owner === k.id) p += unitPower(a.units);
+    for (const c of g.cities) if (c.owner === k.id) p += unitPower(c.garrison);
+    return p;
+  },
+  wantedPower(g, k) {
+    const cities = g.citiesOf(k.id).length;
+    return (350 + g.time * 0.9 + cities * 120) * g.diff.aggression * g.diff.armyMult;
+  },
 
-  scan() {
-    const g = this.g, h = this.h, c = this.ctx;
-    c.enemyHeroes.length = 0; c.allyHeroes.length = 0; c.enemyCreeps.length = 0; c.allyCreeps.length = 0;
-    let ap = 0, ep = 0;
-    for (const u of g.heroes) {
-      if (!u.alive) continue;
-      const d = dist(h.x, h.y, u.x, u.y);
-      if (u.team === h.team) {
-        if (d < 1300) { c.allyHeroes.push(u); ap += heroPower(u); }
-      } else if (d < 1400 && u.visibleTo[h.team] && !u.s.invuln) {
-        c.enemyHeroes.push(u); ep += heroPower(u);
+  recruit(g, k, ctx) {
+    const want = this.wantedPower(g, k) * (ctx.threats.length ? 1.4 : 1);
+    if (this.totalPower(g, k) >= want) return;
+    if (ctx.inc.food < -4 || ctx.inc.gold < -6) return;
+    const cities = ctx.cities.filter(c => !c.siegeBy && c.queue.length < 2).sort((a, b) => (b.isCapital - a.isCapital) || b.level - a.level);
+    for (const c of cities) {
+      const uid = this.pickUnit(g, k, c);
+      if (!uid) continue;
+      if (g.recruitBlock(c, uid)) continue;
+      const cost = UNITS[uid].cost;
+      if ((k.res.gold - (cost.gold || 0)) < 40) continue;
+      g.recruit(c, uid);
+    }
+  },
+
+  pickUnit(g, k, c) {
+    const B = id => c.buildings[id] || 0;
+    const w = [];
+    if (B('barracks') >= 1) w.push(['spear', 3]);
+    if (B('barracks') >= 2) w.push(['sword', 3]);
+    if (B('range') >= 1) w.push(['archer', 2.5]);
+    if (B('range') >= 2) w.push(['crossbow', 2]);
+    if (B('stable') >= 1) w.push(['cavalry', 1.6]);
+    if (B('stable') >= 2) w.push(['knight', 1.6]);
+    const target = k.ai.target ? g.city(k.ai.target) : null;
+    if (B('workshop') >= 1 && target && target.walls >= 1) w.push([B('workshop') >= 2 ? 'catapult' : 'ram', 2.5]);
+    if (!w.length) w.push(['militia', 1]);
+    const ok = w.filter(([u]) => !g.recruitBlock(c, u));
+    if (!ok.length) return null;
+    let sum = 0;
+    for (const [, x] of ok) sum += x;
+    let r = g.rng.next() * sum;
+    for (const [u, x] of ok) { r -= x; if (r <= 0) return u; }
+    return ok[0][0];
+  },
+
+  minGarrison(g, k, c, ctx) {
+    const threat = ctx.threats.filter(t => t.city === c).reduce((s, t) => s + t.power, 0);
+    return (c.isCapital ? 260 : 110) + c.level * 30 + threat * 0.4;
+  },
+
+  military(g, k, ctx) {
+    const armies = g.armiesOf(k.id);
+    // 1. Оборона: идём на того, кто осаждает или идёт к нашему городу
+    for (const t of ctx.threats) {
+      if (t.d > 10 && !(t.army.state === 'siege')) continue;
+      if (t.army.isBandit && t.power < 120) continue;
+      const free = armies.filter(a => a.state === 'idle' || (a.state === 'move' && a.ai !== 'defend'));
+      let best = null, bd = Infinity;
+      for (const a of free) {
+        const d = dist(a.x, a.y, t.army.x, t.army.y);
+        if (unitPower(a.units) >= t.power * 0.9 && d < bd && d < 30) { bd = d; best = a; }
       }
-    }
-    for (const u of g.units) {
-      if (!u.alive || u.kind !== 'creep') continue;
-      if (dist(h.x, h.y, u.x, u.y) > 950) continue;
-      if (u.team === h.team) c.allyCreeps.push(u);
-      else if (u.visibleTo[h.team]) c.enemyCreeps.push(u);
-    }
-    c.allyPower = ap; c.enemyPower = ep;
-    c.hpPct = h.hp / h.s.maxHp;
-    c.manaPct = h.s.maxMana ? h.mana / h.s.maxMana : 1;
-    c.focus = this.focus && this.focus.alive ? this.focus : null;
-    let tw = null, td = 1150;
-    for (const b of g.buildings) {
-      if (!b.alive || b.team === h.team || b.kind === 'fountain') continue;
-      const d = dist(h.x, h.y, b.x, b.y);
-      if (d < td && b.kind === 'tower') { td = d; tw = b; }
-    }
-    c.enemyTower = tw;
-    c.towerTarget = !!(tw && tw.order && tw.order.target === h);
-    return c;
-  }
-
-  nearEnemies(c, r) {
-    const h = this.h;
-    return c.enemyHeroes.some(e => dist(h.x, h.y, e.x, e.y) < r);
-  }
-
-  think() {
-    const g = this.g, h = this.h;
-    if (h.busy || h.casting) return;
-    if (h.order && h.order.type === 'cast') {
-      if (g.time - h.order.t0 < 2.5) return;
-      h.order = null;
-    }
-    const f = g.map.bases[h.team].fountain;
-    const dF = dist(h.x, h.y, f.x, f.y);
-    this.shop();
-    const c = this.scan();
-    if (this.useItems(c, dF)) return;
-
-    if (this.state === 'retreat') {
-      if (dF < 450 && ((c.hpPct > 0.92 && c.manaPct > 0.55) || c.hpPct > 0.99)) {
-        this.state = 'lane';
-      } else {
-        if (c.enemyHeroes.length && this.tryCast(c, true)) return;
-        if (dF > 3000 && !this.nearEnemies(c, 1000) && this.useTp(f.x, f.y)) return;
-        if (dF < 250) { if (h.order) h.orderStop(); return; }
-        h.orderMove(f.x, f.y);
-        return;
+      if (best) {
+        if (!g.order(best, { kind: 'army', id: t.army.id })) best.ai = 'defend';
       }
     }
-    const danger = c.enemyHeroes.length > 0 && c.enemyPower > c.allyPower * 1.5;
-    if (c.hpPct < this.diff.retreat || (c.hpPct < 0.45 && danger) || (c.towerTarget && c.hpPct < 0.45)) {
-      this.state = 'retreat';
-      this.focus = null;
-      if (c.enemyHeroes.length && this.tryCast(c, true)) return;
-      h.orderMove(f.x, f.y);
-      return;
+    // 2. Сбор лишних войск из гарнизонов в полевую армию
+    for (const c of ctx.cities) {
+      if (c.siegeBy) continue;
+      const extra = unitPower(c.garrison) - this.minGarrison(g, k, c, ctx);
+      if (extra < 120) continue;
+      const take = {};
+      let got = 0;
+      for (const u of ['knight', 'cavalry', 'sword', 'crossbow', 'catapult', 'ram', 'spear', 'archer', 'militia']) {
+        const n = c.garrison[u] || 0;
+        if (!n) continue;
+        const sq = UNITS[u].squad;
+        const per = unitPower({ [u]: sq });
+        const squads = Math.min(Math.floor(n / sq), Math.floor((extra - got) / per));
+        if (squads > 0) { take[u] = squads * sq; got += squads * per; }
+        if (got >= extra) break;
+      }
+      if (menCount(take) < 10) continue;
+      const a = g.formArmy(c, take);
+      if (a) {
+        a.name = 'Войско ' + (k.name.split(' ').pop());
+        // сливаем с ближайшей свободной армией
+        const host = armies.find(o => o.state === 'idle' && dist(o.x, o.y, a.x, a.y) < 1.5);
+        if (host) g.mergeInto(host, a);
+        else armies.push(a);
+      }
     }
-    if (dF < 900 && c.hpPct > 0.85) {
-      const fp = this.frontPoint();
-      if (dist(h.x, h.y, fp.x, fp.y) > 3300 && this.useTp(fp.x, fp.y)) return;
+    // 3. Объединяем праздные армии в одну главную
+    const idle = g.armiesOf(k.id).filter(a => a.state === 'idle' && a.ai !== 'defend');
+    if (idle.length >= 2) {
+      idle.sort((a, b) => unitPower(b.units) - unitPower(a.units));
+      const main = idle[0];
+      for (const a of idle.slice(1)) {
+        if (dist(a.x, a.y, main.x, main.y) < 1.2) g.mergeInto(main, a);
+        else if (a.state === 'idle') g.order(a, { kind: 'army', id: main.id });
+      }
     }
-    const tgt = this.pickTarget(c);
-    if (tgt) {
-      this.focus = tgt; c.focus = tgt;
-      if (this.tryCast(c, false)) return;
-      h.orderAttack(tgt);
-      return;
-    }
-    this.focus = null; c.focus = null;
-    if (c.enemyCreeps.length >= 3 && c.manaPct > 0.6 && !c.enemyHeroes.length && this.tryCast(c, false)) return;
-    this.laneLogic(c);
-  }
-
-  pickTarget(c) {
-    const g = this.g, h = this.h;
-    if (!c.enemyHeroes.length) return null;
-    const myPct = c.hpPct;
-    const strong = c.allyPower * this.diff.aggro >= c.enemyPower * 0.9;
+    for (const a of g.armiesOf(k.id)) if (a.ai === 'defend' && a.state === 'idle') a.ai = null;
+    // 4. Наступление
+    const main = g.armiesOf(k.id).filter(a => a.state === 'idle' && a.ai !== 'defend').sort((a, b) => unitPower(b.units) - unitPower(a.units))[0];
+    if (!main) return;
+    const power = unitPower(main.units);
+    const siege = siegePower(main.units);
     let best = null, bs = Infinity;
-    for (const e of c.enemyHeroes) {
-      const d = dist(h.x, h.y, e.x, e.y);
-      const ePct = e.hp / e.s.maxHp;
-      const reach = h.s.range + h.radius + e.radius;
-      if (g.enemyTowerCovering(h.team, e.x, e.y) && !(ePct < 0.2 && myPct > 0.6) && !(c.allyPower > c.enemyPower * 2.2 && myPct > 0.6)) continue;
-      const killable = ePct < 0.3 && myPct > 0.35;
-      let ok;
-      if (strong) ok = d < (h.level < 4 ? reach + 250 : 900);
-      else ok = killable && d < 800;
-      if (!ok) continue;
-      const s = ePct * 100 + d / 15 + (e === this.focus ? -25 : 0);
-      if (s < bs) { bs = s; best = e; }
+    for (const c of g.cities) {
+      if (c.owner === k.id) continue;
+      const isKingdom = c.owner !== -1;
+      if (isKingdom && g.time < GRACE_TIME) continue;
+      const ok = g.kingdom(c.owner);
+      if (isKingdom && (!ok || !ok.alive)) continue;
+      const def = this.cityDefense(g, c);
+      const wallsHard = c.walls >= 2 && c.wallHp > 0 && siege < 10;
+      const need = def * (wallsHard ? 2.2 : 1.35) / g.diff.aggression;
+      if (power < need) continue;
+      const d = dist(c.x, c.y, main.x, main.y);
+      let score = d * 1.5 + def / 40;
+      if (isKingdom && ok.isPlayer) score *= 1.15 / g.diff.aggression;
+      if (c.isCapital) score *= 0.85;
+      if (score < bs) { bs = score; best = c; }
     }
-    return best;
-  }
-
-  tryCast(c, escaping) {
-    const h = this.h;
-    if (h.s.silenced) return false;
-    for (const i of [3, 0, 1, 2]) {
-      const ab = h.abilities[i];
-      if (!ab.lv || ab.def.type === 'passive' || ab.cd > 0 || !ab.def.ai) continue;
-      if (h.mana < LV(ab.def.mana, ab.lv)) continue;
-      if (Math.random() > this.diff.cast) continue;
-      const tgt = ab.def.ai(this.g, h, ab.lv, c, escaping);
-      if (tgt) { h.orderCast(i, tgt, false); return true; }
-    }
-    return false;
-  }
-
-  useTp(x, y) {
-    const h = this.h, g = this.g;
-    const s = h.itemSlot('tp');
-    if (s < 0 || h.items[s].cd > 0) return false;
-    const dest = g.nearestAllyBuilding(h.team, x, y);
-    if (!dest || dist(dest.x, dest.y, h.x, h.y) < 2200) return false;
-    h.orderCast(s, { x, y }, true);
-    return true;
-  }
-
-  useItems(c, dF) {
-    const h = this.h, g = this.g;
-    const ready = id => { const s = h.itemSlot(id); return s >= 0 && h.items[s].cd <= 0 ? s : -1; };
-    let s = ready('salve');
-    if (s >= 0 && c.hpPct < 0.5 && dF > 1500 && !findBuff(h, 'salve') && !this.nearEnemies(c, 700)) {
-      h.orderCast(s, { x: h.x, y: h.y }, true); return true;
-    }
-    s = ready('clarity');
-    if (s >= 0 && c.manaPct < 0.35 && dF > 1500 && !findBuff(h, 'clarity') && !this.nearEnemies(c, 700)) {
-      h.orderCast(s, { x: h.x, y: h.y }, true); return true;
-    }
-    s = ready('bkb');
-    if (s >= 0 && this.focus && c.enemyHeroes.length >= 2 && !h.s.magicImmune) {
-      h.orderCast(s, { x: h.x, y: h.y }, true); return true;
-    }
-    s = ready('blink');
-    if (s >= 0 && h.blinkLockT <= 0) {
-      if (this.state === 'retreat' && this.nearEnemies(c, 650)) {
-        h.orderCast(s, aiEscapePoint(g, h, 1100), true); return true;
-      }
-      const f = this.focus;
-      if (f && f.alive && (h.def.id === 'titan' || h.def.id === 'thunder')) {
-        const d = dist(h.x, h.y, f.x, f.y);
-        const ab = h.abilities[h.def.id === 'titan' ? 0 : 1];
-        if (d > 450 && d < 1100 && ab.lv && ab.cd <= 0 && h.mana >= LV(ab.def.mana, ab.lv)) {
-          h.orderCast(s, { x: f.x, y: f.y }, true); return true;
-        }
+    if (best) {
+      k.ai.target = best.id;
+      g.order(main, { kind: 'city', id: best.id });
+      if (best.owner !== -1 && g.kingdom(best.owner).isPlayer) {
+        main.ai = 'attack';
+        if (g.isVisible(main.x, main.y)) g.notify(k.name + ' двинуло войско на ' + best.name + '!', 'bad', best, true);
       }
     }
-    return false;
-  }
-
-  currentLane() {
-    const plan = this.g.teamPlan[this.h.team];
-    return this.g.time > 900 && plan ? plan : this.lane;
-  }
-
-  frontPoint() {
-    const g = this.g, h = this.h;
-    const lane = this.currentLane();
-    const along = g.laneFront[h.team][lane];
-    const pts = g.lanePaths[h.team][lane];
-    const back = h.s.range > 200 ? 300 : 170;
-    const p = pointAlong(pts, Math.max(0, along - back));
-    return g.map.nearestFree(p.x + this.offX, p.y + this.offY);
-  }
-
-  moveNear(p, tol) {
-    const h = this.h;
-    if (dist(h.x, h.y, p.x, p.y) > tol) h.orderMove(p.x, p.y);
-    else if (h.order && h.order.type !== 'move') h.orderStop();
-  }
-
-  laneLogic(c) {
-    const h = this.h;
-    const front = this.frontPoint();
-    const tw = c.enemyTower;
-    let tanked = false;
-    if (tw) {
-      let n = 0;
-      for (const cr of c.allyCreeps) if (dist(cr.x, cr.y, tw.x, tw.y) < TOWER_RANGE + 20) n++;
-      tanked = n >= 2 && !(tw.order && tw.order.target && tw.order.target.kind === 'hero');
-      const inRange = gapU(h, tw) <= TOWER_RANGE + 60;
-      if (inRange && (c.towerTarget || !tanked)) {
-        const d = dist(h.x, h.y, tw.x, tw.y) || 1;
-        h.orderMove(h.x + (h.x - tw.x) / d * 380, h.y + (h.y - tw.y) / d * 380);
-        return;
-      }
-    }
-    const safe = u => !tw || tanked || dist(u.x, u.y, tw.x, tw.y) > TOWER_RANGE + 60;
-    if (c.enemyCreeps.length) {
-      let lh = null, low = null;
-      for (const cr of c.enemyCreeps) {
-        if (!safe(cr)) continue;
-        const dmg = h.s.damage * armorMult(cr.s.armor);
-        if (cr.hp <= dmg * 1.05 && (!lh || cr.hp < lh.hp)) lh = cr;
-        if (!low || cr.hp < low.hp) low = cr;
-      }
-      if (lh && Math.random() < this.diff.lastHit) { h.orderAttack(lh); return; }
-      const pushing = !c.enemyHeroes.length || c.allyPower > c.enemyPower * 1.3 || h.level >= 10;
-      if (low && pushing) { h.orderAttack(low); return; }
-      if (low && low.hp < h.s.damage * 2.2 && gapU(h, low) <= h.s.range + 60) {
-        this.moveNear({ x: h.x, y: h.y }, 999);
-        return;
-      }
-      this.moveNear(front, 130);
-      return;
-    }
-    if (tw && tanked && !tw.s.invuln) { h.orderAttack(tw); return; }
-    const b = this.siegeTarget(c);
-    if (b) { h.orderAttack(b); return; }
-    this.moveNear(front, 130);
-  }
-
-  siegeTarget(c) {
-    const g = this.g, h = this.h;
-    let best = null, bd = 950;
-    for (const b of g.buildings) {
-      if (!b.alive || b.team === h.team || b.kind === 'fountain' || b.s.invuln) continue;
-      const d = dist(h.x, h.y, b.x, b.y);
-      if (d > bd) continue;
-      let n = 0;
-      for (const cr of c.allyCreeps) if (dist(cr.x, cr.y, b.x, b.y) < TOWER_RANGE + 40) n++;
-      const free = b.kind === 'ancient' || !(b.order && b.order.target);
-      if (n >= 2 || (free && c.allyHeroes.length >= 2)) { bd = d; best = b; }
-    }
-    return best;
-  }
-
-  shop() {
-    const h = this.h, g = this.g;
-    if (g.time > 120 && !h.hasItem('tp') && h.gold >= ITEMS.tp.cost && this.ensureSlot(ITEMS.tp.cost, 'tp')) h.buyItem('tp');
-    const build = h.def.build;
-    let guard = 10;
-    while (this.buildI < build.length && guard--) {
-      const id = build[this.buildI];
-      const def = ITEMS[id];
-      if (!def.consumable && h.hasItem(id)) { this.buildI++; continue; }
-      if (h.gold < def.cost) break;
-      if (!this.ensureSlot(def.cost, id)) break;
-      if (h.buyItem(id)) break;
-      this.buildI++;
-    }
-    if (g.time < 600 && h.gold > 350 && !h.hasItem('salve') && this.buildI > 1 && !h.deliveries.length) h.buyItem('salve');
-  }
-
-  ensureSlot(cost, id) {
-    const h = this.h;
-    if (h.items.filter(it => !it).length > h.deliveries.length) return true;
-    if (!h.inShop()) return false;
-    if (id === 'windboots' && h.hasItem('boots')) return true;
-    const def = ITEMS[id];
-    if (def && def.consumable) {
-      const s = h.itemSlot(id);
-      if (s >= 0 && h.items[s].charges < def.maxCharges) return true;
-    }
-    let worst = -1, wc = Infinity;
-    h.items.forEach((it, i) => {
-      if (!it || it.id === 'tp' || ITEMS[it.id].noSell) return;
-      const d = ITEMS[it.id];
-      const c = d.cost * (d.consumable ? it.charges : 1);
-      if (c < wc) { wc = c; worst = i; }
-    });
-    if (worst >= 0 && wc < cost) { h.sellItem(worst); return true; }
-    return false;
-  }
-}
+  },
+};

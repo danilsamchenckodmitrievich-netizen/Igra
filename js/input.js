@@ -1,344 +1,192 @@
 'use strict';
-// Мышь, клавиатура, касания и миникарта.
+// Управление: касания (сдвиг, щипок, касание), мышь (перетаскивание, колесо, клики), клавиатура, миникарта.
 
 class Input {
-  constructor(canvas, renderer, ui) {
-    this.canvas = canvas;
-    this.r = renderer;
-    this.ui = ui;
-    this.g = null;
-    this.mx = window.innerWidth / 2;
-    this.my = window.innerHeight / 2;
-    this.overCanvas = false;
-    this.keys = new Set();
-    this.targeting = null;
-    this.moveMark = null;
-    this.camLock = true;
-    this.touches = new Map();
+  constructor(app) {
+    this.app = app;
+    this.canvas = app.canvas;
+    this.pointers = new Map();
     this.pinch = null;
-    this.mmDrag = false;
-    renderer.input = this;
+    this.keys = new Set();
     this.bind();
   }
 
-  setGame(g) {
-    this.g = g;
-    this.targeting = null;
-    this.camLock = true;
-    this.moveMark = null;
-    this.keys.clear();
-  }
-
-  active() {
-    const g = this.g;
-    return !!(g && g.player && App.mode === 'game' && !g.paused && g.winner < 0);
-  }
+  get r() { return this.app.renderer; }
 
   bind() {
     const cv = this.canvas;
     cv.addEventListener('contextmenu', e => e.preventDefault());
-    cv.addEventListener('pointerdown', e => this.onDown(e));
-    window.addEventListener('pointermove', e => this.onMove(e));
-    window.addEventListener('pointerup', e => this.onUp(e));
-    window.addEventListener('pointercancel', e => this.onUp(e, true));
+    cv.addEventListener('pointerdown', e => this.down(e));
+    window.addEventListener('pointermove', e => this.move(e));
+    window.addEventListener('pointerup', e => this.up(e));
+    window.addEventListener('pointercancel', e => this.up(e, true));
     cv.addEventListener('wheel', e => {
       e.preventDefault();
-      if (App.mode !== 'game') return;
-      const cam = this.r.cam;
-      cam.zoom = clamp(cam.zoom * Math.exp(-e.deltaY * 0.0012), 0.5, 1.5);
+      if (!this.app.playing()) return;
+      this.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015));
     }, { passive: false });
-    document.addEventListener('pointerleave', () => { this.overCanvas = false; });
-    window.addEventListener('keydown', e => this.onKey(e));
-    window.addEventListener('keyup', e => {
-      this.keys.delete(e.code);
-      if (e.code === 'Tab' && this.g) { e.preventDefault(); this.ui.toggleScore(false); }
-    });
-    window.addEventListener('blur', () => {
-      this.keys.clear();
-      if (this.g) this.ui.toggleScore(false);
-    });
+    window.addEventListener('keydown', e => this.key(e));
+    window.addEventListener('keyup', e => this.keys.delete(e.code));
+    window.addEventListener('blur', () => this.keys.clear());
     const mm = document.getElementById('minimap');
+    let mmDrag = false;
+    const mmPos = e => {
+      const rc = mm.getBoundingClientRect();
+      const w = this.app.game.world;
+      return { x: clamp((e.clientX - rc.left) / rc.width, 0, 1) * w.W, y: clamp((e.clientY - rc.top) / rc.height, 0, 1) * w.H };
+    };
     mm.addEventListener('contextmenu', e => e.preventDefault());
     mm.addEventListener('pointerdown', e => {
       e.preventDefault();
+      if (!this.app.playing()) return;
       Sfx.resume();
-      if (!this.active()) return;
-      const w = this.mmToWorld(e, mm);
-      if (e.button === 2) { this.order(w.x, w.y, true); return; }
-      if (this.targeting && this.targeting.type === 'point') { this.confirm(w.x, w.y); return; }
-      this.camLock = false;
-      this.r.cam.x = w.x; this.r.cam.y = w.y;
-      this.mmDrag = true;
-      try { mm.setPointerCapture(e.pointerId); } catch (err) { /* необязательно */ }
+      const p = mmPos(e);
+      const a = this.app.ui.selectedArmy();
+      if (e.button === 2 && a) { this.orderTo(a, { kind: 'ground', x: p.x, y: p.y }); return; }
+      this.r.cam.x = p.x; this.r.cam.y = p.y;
+      mmDrag = true;
+      try { mm.setPointerCapture(e.pointerId); } catch (err) { /* не обязательно */ }
     });
-    mm.addEventListener('pointermove', e => {
-      if (!this.mmDrag) return;
-      const w = this.mmToWorld(e, mm);
-      this.r.cam.x = w.x; this.r.cam.y = w.y;
-    });
-    mm.addEventListener('pointerup', () => { this.mmDrag = false; });
+    mm.addEventListener('pointermove', e => { if (mmDrag) { const p = mmPos(e); this.r.cam.x = p.x; this.r.cam.y = p.y; } });
+    mm.addEventListener('pointerup', () => { mmDrag = false; });
   }
 
-  mmToWorld(e, mm) {
-    const rc = mm.getBoundingClientRect();
-    return {
-      x: clamp((e.clientX - rc.left) / rc.width, 0, 1) * WORLD_SIZE,
-      y: clamp((e.clientY - rc.top) / rc.height, 0, 1) * WORLD_SIZE,
-    };
+  zoomAt(sx, sy, f) {
+    const r = this.r, cam = r.cam;
+    const before = r.toWorld(sx, sy);
+    cam.z = clamp(cam.z * f, r.minZoom(), 72);
+    const after = r.toWorld(sx, sy);
+    cam.x += before.x - after.x;
+    cam.y += before.y - after.y;
+    r.clampCam();
   }
 
-  onDown(e) {
+  down(e) {
     Sfx.resume();
-    this.mx = e.clientX; this.my = e.clientY;
-    if (!this.active()) return;
-    if (e.pointerType === 'mouse') {
-      const w = this.r.toWorld(e.clientX, e.clientY);
-      if (e.button === 2) {
-        if (this.targeting) { this.targeting = null; return; }
-        this.order(w.x, w.y);
-      } else if (e.button === 0) {
-        if (this.targeting) this.confirm(w.x, w.y);
-        else this.order(w.x, w.y);
+    if (!this.app.playing()) return;
+    try { this.canvas.setPointerCapture(e.pointerId); } catch (err) { /* не обязательно */ }
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, moved: false, button: e.button, type: e.pointerType });
+    if (this.pointers.size === 2) {
+      const [a, b] = [...this.pointers.values()];
+      this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+      for (const p of this.pointers.values()) p.moved = true;
+    }
+  }
+
+  move(e) {
+    const p = this.pointers.get(e.pointerId);
+    if (!p || !this.app.playing()) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+    const r = this.r;
+    if (this.pinch && this.pointers.size >= 2) {
+      const [a, b] = [...this.pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+      this.zoomAt(cx, cy, d / this.pinch.d);
+      r.cam.x -= (cx - this.pinch.cx) / r.cam.z;
+      r.cam.y -= (cy - this.pinch.cy) / r.cam.z;
+      this.pinch.d = d; this.pinch.cx = cx; this.pinch.cy = cy;
+      r.clampCam();
+      return;
+    }
+    if (!p.moved && Math.hypot(p.x - p.sx, p.y - p.sy) > (p.type === 'mouse' ? 4 : 10)) p.moved = true;
+    if (p.moved) {
+      r.cam.x -= dx / r.cam.z;
+      r.cam.y -= dy / r.cam.z;
+      r.clampCam();
+    }
+  }
+
+  up(e, cancel) {
+    const p = this.pointers.get(e.pointerId);
+    if (!p) return;
+    this.pointers.delete(e.pointerId);
+    if (this.pointers.size < 2) this.pinch = null;
+    if (cancel || p.moved || !this.app.playing()) return;
+    this.tap(p.x, p.y, p.button === 2);
+  }
+
+  tap(sx, sy, alt) {
+    const app = this.app, g = app.game, ui = app.ui;
+    const hit = this.r.pick(sx, sy);
+    const a = ui.selectedArmy();
+    if (a) {
+      if (hit.kind === 'army') {
+        const t = hit.obj;
+        if (t.owner === g.player.id) {
+          if (alt && t !== a) { this.orderTo(a, hit); return; }
+          ui.select(t.id === a.id ? null : { kind: 'army', id: t.id });
+          Sfx.play('click');
+          return;
+        }
       }
+      this.orderTo(a, hit);
       return;
     }
-    try { this.canvas.setPointerCapture(e.pointerId); } catch (err) { /* необязательно */ }
-    this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, moved: false });
-    if (this.touches.size === 2) {
-      const [a, b] = [...this.touches.values()];
-      this.pinch = { d: dist(a.x, a.y, b.x, b.y) || 1, zoom: this.r.cam.zoom };
-    }
+    if (alt) { ui.select(null); return; }
+    if (hit.kind === 'ground') { ui.select(null); return; }
+    ui.select({ kind: hit.kind, id: hit.id });
+    Sfx.play('click');
   }
 
-  onMove(e) {
-    this.mx = e.clientX; this.my = e.clientY;
-    if (e.pointerType === 'mouse') { this.overCanvas = e.target === this.canvas; return; }
-    const t = this.touches.get(e.pointerId);
-    if (!t || !this.active()) return;
-    const dx = e.clientX - t.x, dy = e.clientY - t.y;
-    t.x = e.clientX; t.y = e.clientY;
-    if (this.pinch && this.touches.size >= 2) {
-      const [a, b] = [...this.touches.values()];
-      const d = dist(a.x, a.y, b.x, b.y) || 1;
-      this.r.cam.zoom = clamp(this.pinch.zoom * d / this.pinch.d, 0.5, 1.5);
-      for (const p of this.touches.values()) p.moved = true;
-      return;
+  orderTo(a, hit) {
+    const g = this.app.game, ui = this.app.ui;
+    let target, attack = false, x, y;
+    if (hit.kind === 'army') {
+      const t = hit.obj;
+      target = { kind: 'army', id: t.id };
+      attack = t.owner !== a.owner;
+      x = t.x; y = t.y;
+    } else if (hit.kind === 'city') {
+      const c = hit.obj;
+      target = { kind: 'city', id: c.id };
+      attack = c.owner !== a.owner;
+      x = c.x + 0.5; y = c.y + 0.5;
+    } else {
+      const i = g.world.tileAt(hit.x, hit.y);
+      if (i < 0 || !g.world.passable(i)) { ui.toast('Туда не пройти: там вода'); Sfx.play('error'); return; }
+      target = { kind: 'ground', x: hit.x, y: hit.y };
+      x = hit.x; y = hit.y;
     }
-    if (!t.moved && dist(t.x, t.y, t.sx, t.sy) > 14) t.moved = true;
-    if (t.moved) {
-      this.camLock = false;
-      this.r.cam.x -= dx / this.r.cam.zoom;
-      this.r.cam.y -= dy / this.r.cam.zoom;
-    }
+    const err = g.order(a, target);
+    if (err) { ui.toast(err); Sfx.play('error'); return; }
+    this.r.marker = { x, y, t: 0, attack };
+    Sfx.play(attack ? 'horn' : 'march');
+    ui.html = '';
+    ui.renderPanel();
   }
 
-  onUp(e, cancel) {
-    if (e.pointerType === 'mouse') return;
-    const t = this.touches.get(e.pointerId);
-    if (!t) return;
-    this.touches.delete(e.pointerId);
-    if (this.touches.size < 2) this.pinch = null;
-    if (cancel || t.moved || !this.active()) return;
-    const w = this.r.toWorld(t.x, t.y);
-    if (this.targeting) this.confirm(w.x, w.y);
-    else this.order(w.x, w.y);
-  }
-
-  onKey(e) {
-    const g = this.g;
-    if (!g || App.mode !== 'game') return;
+  key(e) {
+    const app = this.app;
+    if (!app.game || app.mode !== 'game') return;
     const k = e.code;
-    if (k === 'Tab') { e.preventDefault(); this.ui.toggleScore(true); return; }
     if (k === 'Escape') {
       e.preventDefault();
-      if (this.targeting) this.targeting = null;
-      else if (this.ui.shopOpen) this.ui.toggleShop(false);
-      else App.togglePause();
+      if (app.ui.sel) app.ui.select(null);
+      else app.togglePause();
       return;
     }
-    if (k === 'KeyP' || k === 'F10') { e.preventDefault(); App.togglePause(); return; }
-    if (k === 'KeyM') { App.toggleSound(); return; }
-    if (!this.active()) return;
-    if (k.startsWith('Arrow')) { e.preventDefault(); this.keys.add(k); return; }
-    const ab = { KeyQ: 0, KeyW: 1, KeyE: 2, KeyR: 3 }[k];
-    if (ab !== undefined) {
-      if (e.ctrlKey || e.metaKey) return;
-      e.preventDefault();
-      if (e.shiftKey || e.altKey) {
-        if (g.player.levelAbility(ab)) Sfx.play('click');
-        else this.ui.toast('Сейчас нельзя изучить эту способность');
-      } else this.activateAbility(ab);
-      return;
-    }
-    if (/^Digit[1-6]$/.test(k)) { this.activateItem(+k.slice(5) - 1); return; }
-    if (/^Numpad[1-6]$/.test(k)) { this.activateItem(+k.slice(6) - 1); return; }
-    switch (k) {
-      case 'KeyA': this.startAttackMove(); break;
-      case 'KeyS': case 'KeyH': g.player.orderStop(); this.targeting = null; break;
-      case 'KeyB': case 'F4': e.preventDefault(); this.ui.toggleShop(); break;
-      case 'Space': e.preventDefault(); this.centerCamera(true); break;
-      case 'KeyY': this.camLock = !this.camLock; this.ui.toast(this.camLock ? 'Камера следует за героем' : 'Камера свободна', true); break;
-      case 'F1': e.preventDefault(); this.centerCamera(true); break;
-    }
-  }
-
-  centerCamera(lock) {
-    const p = this.g && this.g.player;
-    if (!p) return;
-    this.r.cam.x = p.x; this.r.cam.y = p.y;
-    if (lock) this.camLock = true;
-  }
-
-  startAttackMove() {
-    if (!this.active()) return;
-    this.targeting = { source: 'amove', type: 'point', range: 0 };
-  }
-
-  activateAbility(i) {
-    if (!this.active()) return;
-    const h = this.g.player;
-    if (!h.alive) return;
-    const ab = h.abilities[i];
-    if (!ab) return;
-    if (ab.lv === 0) {
-      this.ui.toast(h.canLevel(i) ? 'Сначала изучите: Shift+' + ABILITY_KEYS[i] + ' или «+»' : 'Способность ещё не изучена');
-      Sfx.play('error');
-      return;
-    }
-    const def = ab.def;
-    if (def.type === 'passive') { this.ui.toast('Это пассивная способность'); return; }
-    const o = { item: false, slot: i };
-    const why = h.castBlock(o, h.castInfo(o));
-    if (why) { this.ui.toast(why); Sfx.play('error'); return; }
-    if (def.type === 'none') { h.cancelChannel(); h.orderCast(i, { x: h.x, y: h.y }, false); this.targeting = null; return; }
-    const tg = this.targeting;
-    if (tg && tg.source === 'ability' && tg.slot === i && def.target === 'ally') {
-      h.orderCast(i, { unit: h }, false);
-      this.targeting = null;
-      return;
-    }
-    this.targeting = {
-      source: 'ability', slot: i, type: def.type, range: LV(def.range, ab.lv), radius: def.radius || 0,
-      clamp: !!def.clamp, team: def.target || 'enemy',
-    };
-  }
-
-  activateItem(i) {
-    if (!this.active()) return;
-    const h = this.g.player;
-    if (!h.alive) return;
-    const it = h.items[i];
-    if (!it) return;
-    const def = ITEMS[it.id];
-    if (!def.active) { this.ui.toast('У предмета нет активного свойства'); return; }
-    const act = ITEM_ACTIVES[def.active];
-    const o = { item: true, slot: i };
-    const why = h.castBlock(o, h.castInfo(o));
-    if (why) { this.ui.toast(why); Sfx.play('error'); return; }
-    if (act.type === 'none') { h.orderCast(i, { x: h.x, y: h.y }, true); this.targeting = null; return; }
-    this.targeting = { source: 'item', slot: i, type: act.type, range: act.range, clamp: !!act.clamp, radius: 0, team: 'any' };
-    if (def.id === 'tp') this.ui.toast('Выберите точку на карте или миникарте', true);
-  }
-
-  unitAt(wx, wy, filter) {
-    const g = this.g;
-    const list = this.r.drawn || [];
-    const pad = 14 / this.r.cam.zoom;
-    let best = null, bd = Infinity;
-    for (const u of list) {
-      if (!u.alive || u.kind === 'fountain') continue;
-      if (filter && !filter(u)) continue;
-      if (!g.spectator && u.team !== g.playerTeam && !u.isBuilding && !u.visibleTo[g.playerTeam]) continue;
-      const d = dist(wx, wy, u.x, u.y - (u.z || 0)) - u.radius - (u.isBuilding ? 20 : 0);
-      if (d > pad) continue;
-      const score = d - (u.kind === 'hero' ? 12 : 0);
-      if (score < bd) { bd = score; best = u; }
-    }
-    return best;
-  }
-
-  order(wx, wy, fromMinimap) {
-    const h = this.g.player;
-    if (!h || !h.alive) return;
-    h.cancelChannel();
-    const u = fromMinimap ? null : this.unitAt(wx, wy);
-    if (u && u !== h && u.team !== h.team && h.canAttack(u)) {
-      h.orderAttack(u);
-      this.mark(u.x, u.y, true);
-    } else if (u && u.team !== h.team && u.s.invuln) {
-      this.ui.toast(u.isBuilding ? 'Строение защищено — сначала разрушьте предыдущую башню' : 'Цель неуязвима');
-      Sfx.play('error');
-    } else {
-      const x = clamp(wx, 30, WORLD_SIZE - 30), y = clamp(wy, 30, WORLD_SIZE - 30);
-      h.orderMove(x, y);
-      this.mark(x, y, false);
-    }
-  }
-
-  mark(x, y, attack) { this.moveMark = { x, y, attack, t: 0 }; }
-
-  confirm(wx, wy) {
-    const tg = this.targeting, h = this.g.player;
-    if (!h || !h.alive) { this.targeting = null; return; }
-    if (tg.source === 'amove') {
-      h.cancelChannel();
-      h.orderAttackMove(wx, wy);
-      this.mark(wx, wy, true);
-      this.targeting = null;
-      return;
-    }
-    if (tg.type === 'point') {
-      h.cancelChannel();
-      h.orderCast(tg.slot, { x: wx, y: wy }, tg.source === 'item');
-      this.targeting = null;
-      return;
-    }
-    if (tg.type === 'unit') {
-      const want = tg.team;
-      const u = this.unitAt(wx, wy, c => !c.isBuilding && (want === 'any' || (want === 'ally' ? c.team === h.team : c.team !== h.team)));
-      if (!u) {
-        this.ui.toast(want === 'ally' ? 'Выберите союзника' : want === 'any' ? 'Выберите героя или крипа' : 'Выберите врага');
-        Sfx.play('error');
-        return;
-      }
-      h.cancelChannel();
-      h.orderCast(tg.slot, { unit: u }, tg.source === 'item');
-      this.targeting = null;
-    }
+    if (!app.playing()) return;
+    if (k === 'Space') { e.preventDefault(); app.setSpeed(app.speed === 0 ? app.lastSpeed || 1 : 0); return; }
+    if (k === 'Digit1' || k === 'Digit2' || k === 'Digit3') { app.setSpeed(+k.slice(5)); return; }
+    if (k === 'Equal' || k === 'NumpadAdd') { this.zoomAt(this.r.w / 2, this.r.h / 2, 1.2); return; }
+    if (k === 'Minus' || k === 'NumpadSubtract') { this.zoomAt(this.r.w / 2, this.r.h / 2, 1 / 1.2); return; }
+    if (k === 'KeyH') { const c = app.game.city(app.game.player.capital); if (c) app.focus(c.x + 0.5, c.y + 0.5); return; }
+    if (/^(Arrow|Key[WASD])/.test(k)) { this.keys.add(k); e.preventDefault(); }
   }
 
   update(dt) {
-    const g = this.g, r = this.r, cam = r.cam;
-    if (!g) return;
-    if (this.moveMark) { this.moveMark.t += dt; if (this.moveMark.t > 0.6) this.moveMark = null; }
-    const p = g.player;
-    if (this.targeting && (!p || !p.alive)) this.targeting = null;
-    const w = r.toWorld(this.mx, this.my);
-    r.hover = this.overCanvas ? this.unitAt(w.x, w.y) : null;
-    let cursor = 'default';
-    if (this.targeting) cursor = 'crosshair';
-    else if (r.hover && p && r.hover.team !== p.team) cursor = 'pointer';
-    if (this.canvas.style.cursor !== cursor) this.canvas.style.cursor = cursor;
-    if (g.centerOnPlayer && p) { cam.x = p.x; cam.y = p.y; g.centerOnPlayer = false; }
     let dx = 0, dy = 0;
-    if (this.keys.has('ArrowLeft')) dx -= 1;
-    if (this.keys.has('ArrowRight')) dx += 1;
-    if (this.keys.has('ArrowUp')) dy -= 1;
-    if (this.keys.has('ArrowDown')) dy += 1;
-    if (this.overCanvas && !this.mmDrag) {
-      const e = 6;
-      if (this.mx <= e) dx = -1; else if (this.mx >= r.w - e) dx = 1;
-      if (this.my <= e) dy = -1; else if (this.my >= r.h - e) dy = 1;
-    }
+    if (this.keys.has('ArrowLeft') || this.keys.has('KeyA')) dx--;
+    if (this.keys.has('ArrowRight') || this.keys.has('KeyD')) dx++;
+    if (this.keys.has('ArrowUp') || this.keys.has('KeyW')) dy--;
+    if (this.keys.has('ArrowDown') || this.keys.has('KeyS')) dy++;
     if (dx || dy) {
-      this.camLock = false;
-      const sp = 1500 / cam.zoom * dt;
-      cam.x += dx * sp; cam.y += dy * sp;
-    } else if (this.camLock && p && p.alive && !this.mmDrag) {
-      const k = Math.min(1, dt * 7);
-      cam.x = lerp(cam.x, p.x, k);
-      cam.y = lerp(cam.y, p.y, k);
+      const r = this.r;
+      r.cam.x += dx * 700 / r.cam.z * dt;
+      r.cam.y += dy * 700 / r.cam.z * dt;
+      r.clampCam();
     }
-    r.clampCam();
   }
 }
