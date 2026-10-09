@@ -180,6 +180,7 @@ const App = {
     }
   },
   focus(x, y) {
+    this.renderer.glide = null;
     this.renderer.cam.x = x; this.renderer.cam.y = y;
     this.renderer.clampCam();
   },
@@ -224,10 +225,16 @@ const App = {
 
   onResize() {
     this.renderer.resize();
-    const dpr = this.renderer.dpr;
-    this.mm.width = Math.max(40, Math.round(this.mm.clientWidth * dpr));
-    this.mm.height = Math.max(30, Math.round(this.mm.clientHeight * dpr));
     if (this.game) this.renderer.clampCam();
+  },
+  // Размер холста миникарты берётся из вёрстки; пока она скрыта (меню, свёрнута на телефоне), не рисуем.
+  sizeMinimap() {
+    const cw = this.mm.clientWidth, ch = this.mm.clientHeight;
+    if (!cw || !ch) return false;
+    const dpr = this.renderer.dpr;
+    const W = Math.round(cw * dpr), H = Math.round(ch * dpr);
+    if (this.mm.width !== W || this.mm.height !== H) { this.mm.width = W; this.mm.height = H; }
+    return true;
   },
 
   simulate(gdt) {
@@ -271,7 +278,7 @@ const App = {
         this.input.update(dt);
         this.ui.update(dt);
         this.mmT -= dt;
-        if (this.mmT <= 0) { this.mmT = 1 / 12; this.renderer.drawMinimap(this.mmCtx, this.mm.width, this.mm.height); }
+        if (this.mmT <= 0) { this.mmT = 1 / 12; if (this.sizeMinimap()) this.renderer.drawMinimap(this.mmCtx, this.mm.width, this.mm.height); }
         if (this.speed > 0) {
           this.saveT += dt * this.speed;
           if (this.saveT >= AUTOSAVE_EVERY) { this.saveT = 0; this.save(); }

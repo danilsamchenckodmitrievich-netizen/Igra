@@ -346,6 +346,9 @@ class World {
       heap.push(i, 0);
     }
     const byId = new Map(cities.map(c => [c.id, c]));
+    // неровный край владений: радиус города колеблется по шуму, чтобы границы не были восьмиугольниками
+    if (!this.borderNoise) this.borderNoise = makeNoise(this.seed + 53);
+    const bn = this.borderNoise;
     while (heap.size) {
       const k = heap.pop();
       const c = byId.get(owner[k]);
@@ -356,7 +359,7 @@ class World {
         if (!this.inside(nx, ny)) continue;
         const j = this.idx(nx, ny);
         if (!this.passable(j)) continue;
-        if (dist(nx, ny, c.x, c.y) > r + 0.5) continue;
+        if (dist(nx, ny, c.x, c.y) > r + 0.5 + (fractal(bn, nx * 0.22, ny * 0.22, 2) - 0.5) * 5) continue;
         const ng = best[k] + this.moveCost(j) * (dx && dy ? 1.41 : 1);
         if (ng < best[j]) { best[j] = ng; owner[j] = c.id; heap.push(j, ng); }
       }

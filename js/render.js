@@ -41,6 +41,7 @@ class Renderer {
     this.chunks.clear();
     const w = g.world;
     this.baseImg = this.buildBaseImage();
+    this.riverLines = w.rivers.map((r, k) => this.meander(r, k));
     this.coast = this.contour((x, y) => w.inside(x, y) && w.terrain[w.idx(x, y)] > T.SHALLOW, 0, 0, w.W, w.H);
     this.layers = {};
     for (const name of ['territory', 'fog', 'snow', 'autumn']) {
@@ -53,6 +54,7 @@ class Renderer {
     this.fogKey = -1;
     this.mmBase = null;
     this.particles.length = 0;
+    this.glide = null;
   }
 
   resize() {
@@ -72,6 +74,8 @@ class Renderer {
     const c = this.cam;
     return { x: (sx - this.w / 2) / c.z + c.x, y: (sy - this.h / 2) / c.z + c.y };
   }
+  // плавно подвести камеру к точке (например, чтобы выбранный город не прятался под панелью)
+  glideTo(x, y) { this.glide = { x, y, t: 0.35 }; }
   clampCam() {
     const w = this.g.world, c = this.cam;
     c.z = clamp(c.z, this.minZoom(), 72);
@@ -104,18 +108,20 @@ class Renderer {
     return cv;
   }
 
-  // Изолиния двоичного поля по центрам клеток (марширующие квадраты) — гладкие берега и границы.
+  // Изолиния двоичного поля по центрам клеток (марширующие квадраты). Отрезки сшиваются в цепочки
+  // и скругляются срезанием углов (Чайкин), чтобы берега и границы были плавными, без ступенек.
   contour(inside, x0, y0, x1, y1) {
-    const p = new Path2D();
+    const segs = [];
     for (let y = y0 - 1; y < y1; y++) {
       for (let x = x0 - 1; x < x1; x++) {
         const a = inside(x, y) ? 1 : 0, b = inside(x + 1, y) ? 1 : 0;
         const c = inside(x + 1, y + 1) ? 1 : 0, d = inside(x, y + 1) ? 1 : 0;
         const code = a * 8 + b * 4 + c * 2 + d;
         if (code === 0 || code === 15) continue;
-        const cx = x + 0.5, cy = y + 0.5;
-        const T_ = [cx + 0.5, cy], R_ = [cx + 1, cy + 0.5], B_ = [cx + 0.5, cy + 1], L_ = [cx, cy + 0.5];
-        const seg = (u, v) => { p.moveTo(u[0], u[1]); p.lineTo(v[0], v[1]); };
+        // точки на серединах рёбер, в удвоенных целых координатах
+        const X = 2 * x + 1, Y = 2 * y + 1;
+        const T_ = [X + 1, Y], R_ = [X + 2, Y + 1], B_ = [X + 1, Y + 2], L_ = [X, Y + 1];
+        const seg = (u, v) => segs.push(u, v);
         switch (code) {
           case 1: case 14: seg(L_, B_); break;
           case 2: case 13: seg(B_, R_); break;
@@ -128,7 +134,63 @@ class Renderer {
         }
       }
     }
+    // сшивание: у каждой точки не больше двух отрезков
+    const key = q => q[0] * 65536 + q[1];
+    const at = new Map();
+    const ns = segs.length / 2;
+    for (let i = 0; i < segs.length; i++) {
+      const k = key(segs[i]);
+      const l = at.get(k);
+      if (l) l.push(i); else at.set(k, [i]);
+    }
+    const used = new Uint8Array(ns);
+    const p = new Path2D();
+    const next = (pt, from) => {
+      for (const j of at.get(key(pt))) {
+        const s2 = j >> 1;
+        if (s2 !== from && !used[s2]) return j;
+      }
+      return -1;
+    };
+    for (let s0 = 0; s0 < ns; s0++) {
+      if (used[s0]) continue;
+      used[s0] = 1;
+      const pts = [segs[2 * s0], segs[2 * s0 + 1]];
+      // вперёд от второго конца
+      let cur = s0, j;
+      while ((j = next(pts[pts.length - 1], cur)) >= 0) {
+        cur = j >> 1; used[cur] = 1;
+        pts.push(segs[j ^ 1]);
+      }
+      // назад от первого конца (если цепочка не замкнулась)
+      const closed = key(pts[0]) === key(pts[pts.length - 1]);
+      if (!closed) {
+        cur = s0;
+        while ((j = next(pts[0], cur)) >= 0) {
+          cur = j >> 1; used[cur] = 1;
+          pts.unshift(segs[j ^ 1]);
+        }
+      }
+      this.smoothPath(p, pts, closed);
+    }
     return p;
+  }
+  smoothPath(p, pts, closed) {
+    let q = pts.map(v => [v[0] / 2, v[1] / 2]);
+    if (closed) q.pop();
+    for (let it = 0; it < 2 && q.length > 2; it++) {
+      const r = [], n = q.length;
+      if (!closed) r.push(q[0]);
+      for (let i = 0; i < (closed ? n : n - 1); i++) {
+        const a = q[i], b = q[(i + 1) % n];
+        r.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25], [a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+      }
+      if (!closed) r.push(q[n - 1]);
+      q = r;
+    }
+    p.moveTo(q[0][0], q[0][1]);
+    for (let i = 1; i < q.length; i++) p.lineTo(q[i][0], q[i][1]);
+    if (closed) p.closePath();
   }
 
   bakeChunk(cx, cy) {
@@ -167,8 +229,8 @@ class Renderer {
     }
     // реки
     c.lineCap = 'round'; c.lineJoin = 'round';
-    for (const r of w.rivers) this.smoothLine(c, r, 0.46, '#4c7d93');
-    for (const r of w.rivers) this.smoothLine(c, r, 0.3, '#7ab3c8');
+    for (const r of this.riverLines) this.smoothLine(c, r, 0.46, '#4c7d93');
+    for (const r of this.riverLines) this.smoothLine(c, r, 0.3, '#7ab3c8');
     // дороги
     c.setLineDash([0.32, 0.2]);
     for (const r of w.roads) this.smoothLine(c, r, 0.16, 'rgba(110,78,40,0.85)');
@@ -195,6 +257,19 @@ class Renderer {
     return cv;
   }
 
+  // Реки текут по клеткам и выходят прямыми; для рисунка слегка изгибаем их поперёк течения (в пределах клетки).
+  meander(pts, seed) {
+    const n = pts.length;
+    const h = k => tileHash(seed * 977 + k, 77) - 0.5;
+    const nz = t => { const i = Math.floor(t), f = t - i, s = f * f * (3 - 2 * f); return h(i) * (1 - s) + h(i + 1) * s; };
+    return pts.map((p, k) => {
+      if (k === 0 || k === n - 1) return p;
+      const a = pts[k - 1], b = pts[k + 1];
+      const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+      const amp = 0.64 * nz(k * 0.45);
+      return { x: p.x - dy / L * amp, y: p.y + dx / L * amp };
+    });
+  }
   smoothLine(c, pts, width, color) {
     if (pts.length < 2) return;
     c.strokeStyle = color;
@@ -333,7 +408,7 @@ class Renderer {
 
   rebuildFog() {
     const g = this.g, w = g.world, W = w.W, H = w.H, n = W * H;
-    if (!this.fogU) { this.fogU = new Float32Array(n); this.fogD = new Float32Array(n); this.fogT = new Float32Array(n); }
+    if (!this.fogU || this.fogU.length !== n) { this.fogU = new Float32Array(n); this.fogD = new Float32Array(n); this.fogT = new Float32Array(n); }
     const U = this.fogU, D = this.fogD;
     for (let i = 0; i < n; i++) {
       U[i] = g.explored[i] ? 0 : 1;
@@ -378,6 +453,13 @@ class Renderer {
     if (!g) return;
     this.time += dt;
     this.frame = (this.frame || 0) + 1;
+    if (this.glide) {
+      const gl = this.glide, k = Math.min(1, dt * 12);
+      cam.x += (gl.x - cam.x) * k; cam.y += (gl.y - cam.y) * k;
+      this.clampCam();
+      gl.t -= dt;
+      if (gl.t <= 0) this.glide = null;
+    }
     const terrKey = g.territoryVersion + ':' + g.ownershipVersion + ':' + g.cities.length;
     if (terrKey !== this.terrKey) { this.terrKey = terrKey; this.rebuildTerritory(); }
     const fogKey = Math.floor(g.time * 2) + ':' + (g.exploredVersion || 0);

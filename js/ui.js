@@ -67,8 +67,24 @@ class UI {
     if (this.app.renderer) this.app.renderer.selected = sel && (sel.kind === 'army' || sel.kind === 'city') ? sel : null;
     this.renderPanel();
     this.updateHint();
+    this.revealSelection();
     if (sel && sel.kind === 'city') this.coachEvent('selectCity', sel.id);
     if (sel && sel.kind === 'army') this.coachEvent('selectArmy', sel.id);
+  }
+  // Если панель закрыла выбранный город или армию, сдвинуть карту так, чтобы он был виден рядом с панелью.
+  revealSelection() {
+    const s = this.sel, r = this.app.renderer, panel = $('panel');
+    if (!r || !s || panel.hidden || (s.kind !== 'city' && s.kind !== 'army')) return;
+    const o = s.kind === 'city' ? this.g.city(s.id) : this.g.army(s.id);
+    if (!o) return;
+    const p = s.kind === 'city' ? r.toScreen(o.x + 0.5, o.y + 0.5) : r.toScreen(o.x, o.y);
+    const pr = panel.getBoundingClientRect(), top = $('topbar').getBoundingClientRect().bottom;
+    const m = 48;
+    let tx = p.x, ty = p.y;
+    if (pr.left <= 1) { if (p.y > pr.top - m) ty = (top + pr.top) / 2; } // нижняя шторка на телефоне
+    else if (p.x > pr.left - m) tx = pr.left / 2; // боковая панель
+    if (tx === p.x && ty === p.y) return;
+    r.glideTo(r.cam.x + (p.x - tx) / r.cam.z, r.cam.y + (p.y - ty) / r.cam.z);
   }
   selectedArmy() {
     const s = this.sel;

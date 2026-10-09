@@ -43,16 +43,17 @@ class Input {
       const p = mmPos(e);
       const a = this.app.ui.selectedArmy();
       if (e.button === 2 && a) { this.orderTo(a, { kind: 'ground', x: p.x, y: p.y }); return; }
-      this.r.cam.x = p.x; this.r.cam.y = p.y;
+      this.app.focus(p.x, p.y);
       mmDrag = true;
       try { mm.setPointerCapture(e.pointerId); } catch (err) { /* не обязательно */ }
     });
-    mm.addEventListener('pointermove', e => { if (mmDrag) { const p = mmPos(e); this.r.cam.x = p.x; this.r.cam.y = p.y; } });
+    mm.addEventListener('pointermove', e => { if (mmDrag) { const p = mmPos(e); this.app.focus(p.x, p.y); } });
     mm.addEventListener('pointerup', () => { mmDrag = false; });
   }
 
   zoomAt(sx, sy, f) {
     const r = this.r, cam = r.cam;
+    r.glide = null;
     const before = r.toWorld(sx, sy);
     cam.z = clamp(cam.z * f, r.minZoom(), 72);
     const after = r.toWorld(sx, sy);
@@ -64,6 +65,7 @@ class Input {
   down(e) {
     Sfx.resume();
     if (!this.app.playing()) return;
+    this.r.glide = null;
     try { this.canvas.setPointerCapture(e.pointerId); } catch (err) { /* не обязательно */ }
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, moved: false, button: e.button, type: e.pointerType });
     if (this.pointers.size === 2) {
@@ -184,6 +186,7 @@ class Input {
     if (this.keys.has('ArrowDown') || this.keys.has('KeyS')) dy++;
     if (dx || dy) {
       const r = this.r;
+      r.glide = null;
       r.cam.x += dx * 700 / r.cam.z * dt;
       r.cam.y += dy * 700 / r.cam.z * dt;
       r.clampCam();
