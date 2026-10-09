@@ -136,8 +136,10 @@ button:focus-visible { outline: 2px solid var(--gold-hi); outline-offset: 2px; }
 .p-head .sub { color: var(--ink-soft); font-size: 14px; }
 .p-stats { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0 8px; font-size: 14px; }
 .p-stats span { display: inline-flex; align-items: center; gap: 4px; }
-.tabs { display: flex; gap: 4px; margin: 8px 0 10px; border-bottom: 2px solid var(--line); }
+.tabs { display: flex; gap: 4px; margin: 8px 0 10px; border-bottom: 2px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
 .tabs button {
+  flex: 0 0 auto; white-space: nowrap;
   background: none; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 7px 12px;
   font-family: var(--font-head); font-size: 17px; color: var(--ink-soft); margin-bottom: -2px;
 }
@@ -303,6 +305,8 @@ table.t tr.click:hover td { background: rgba(215, 169, 68, 0.15); }
   #menu-btn { padding: 3px 6px; }
   #hint { display: none; }
   #coach p { font-size: 14px; }
+  .tabs { gap: 0; }
+  .tabs button { padding: 6px 8px; font-size: 15px; }
   #panel.compact { max-height: 36vh; }
   #panel { left: 0; right: 0; top: auto; width: auto; max-height: 56vh; border-left: 0; border-top: 3px solid var(--wood-line); border-radius: 12px 12px 0 0; }
   #minimap-wrap { display: none; }

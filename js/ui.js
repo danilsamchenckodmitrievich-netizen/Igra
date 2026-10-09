@@ -386,7 +386,7 @@ class UI {
     const g = this.g, pl = g.player;
     let h = `<div class="p-head">${Icons.crest(pl, 40)}<div><h2>${escapeHtml(pl.name)}</h2><div class="sub">${g.citiesOf(pl.id).length} из ${g.cities.length} городов · для победы нужно ${Math.ceil(g.cities.length * WIN_SHARE)}</div></div></div>`;
     const tabs = [['treasury', 'Казна'], ['trade', 'Рынок'], ['cities', 'Города'], ['armies', 'Армии'], ['rivals', 'Соперники']];
-    h += '<div class="tabs" style="flex-wrap:wrap">' + tabs.map(([v, n]) => `<button type="button" data-act="ktab" data-v="${v}" class="${this.kTab === v ? 'on' : ''}">${n}</button>`).join('') + '</div>';
+    h += '<div class="tabs">' + tabs.map(([v, n]) => `<button type="button" data-act="ktab" data-v="${v}" class="${this.kTab === v ? 'on' : ''}">${n}</button>`).join('') + '</div>';
     if (this.kTab === 'treasury') {
       h += '<table class="t"><thead><tr><th></th>' + RES.map(r => `<th class="num" style="color:${r.color}">${Icons.svg(r.id)}</th>`).join('') + '</tr></thead><tbody>';
       for (const [key, name] of [['cities', 'Города'], ['upkeep', 'Войска'], ['factory', 'Мануфактуры'], ['total', 'Итого в минуту']]) {
