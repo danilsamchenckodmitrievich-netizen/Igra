@@ -220,6 +220,7 @@ const App = {
     if (!$('help').hidden) { $('help-close').click(); return true; }
     if (this.mode === 'game') {
       if (!$('end').hidden) { this.showMenu(); return true; }
+      if (this.input.tool) { this.input.setTool(null); return true; }
       if (this.ui.sel) { this.ui.select(null); return true; }
       this.togglePause();
       return true;

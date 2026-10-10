@@ -540,6 +540,7 @@ class Renderer {
     // территории и границы
     ctx.drawImage(this.layers.territory, 0, 0, w.W, w.H);
     this.drawBorders(ctx, z);
+    for (const f of RenderExt.map) f(ctx, this, z, tl, br);
     this.drawPaths(ctx, z);
     this.drawCities(ctx, z, tl, br);
     // туман
@@ -549,6 +550,7 @@ class Renderer {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.drawCityLabels(ctx, z, tl, br);
     this.drawArmies(ctx, z, tl, br);
+    for (const f of RenderExt.screen) f(ctx, this, z, tl, br, dt);
     this.drawMarker(ctx, dt);
     this.drawParticles(ctx, dt);
     if (season === 3) this.drawSnowfall(ctx, dt);

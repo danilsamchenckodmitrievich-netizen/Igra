@@ -244,6 +244,9 @@ class UI {
         err = g.trade(pl, d.r, +d.n, d.sell === '1');
         if (!err) Sfx.play('coin');
         break;
+      default:
+        // действия модулей: обработчик возвращает текст ошибки или ничего
+        if (UIExt.actions[d.act]) { err = UIExt.actions[d.act](d, this, city, army) || null; if (err === 'nopanel') return; }
     }
     if (err) { this.toast(err); Sfx.play('error'); }
     this.html = '';
@@ -367,11 +370,14 @@ class UI {
       ['def', 'Оборона', 'walls', cons && cons.kind !== 'building' ? '<i class="dot" title="Идёт стройка"></i>' : ''],
       ['army', 'Войска', 'swords', c.queue.length ? `<span class="badge" title="В очереди найма">${c.queue.length}</span>` : ''],
     ];
+    for (const s of UIExt.citySections) if (!s.when || s.when(g, c)) tabs.push([s.id, s.title, s.icon || 'flag', '']);
     h += '<div class="tabs ctabs" data-key="tabs" role="tablist">' + tabs.map(([v, n, ic, extra]) =>
       `<button type="button" role="tab" aria-selected="${this.cityTab === v}" data-act="tab" data-v="${v}" class="${this.cityTab === v ? 'on' : ''}">${Icons.svg(ic)}<span class="tl">${n}</span>${extra}</button>`).join('') + '</div>';
     if (cons) h += this.bannerHtml(c, pl);
+    const ext = UIExt.citySections.find(s => s.id === this.cityTab);
     if (this.cityTab === 'eco') h += this.ecoHtml(c, pl);
     else if (this.cityTab === 'def') h += this.defHtml(c, pl);
+    else if (ext) h += ext.html(g, c, this);
     else h += this.armyTabHtml(c, pl);
     return h;
   }
@@ -410,6 +416,7 @@ class UI {
       h += '</div>';
       if (inf && this.inflOpen) h += this.inflHtml(inf);
     }
+    for (const f of UIExt.cityHeader) h += f(g, c, mine, this) || '';
     return h + '</div>';
   }
 
@@ -690,8 +697,12 @@ class UI {
     const g = this.g, pl = g.player;
     let h = `<div class="p-head">${Icons.crest(pl, 40)}<div><h2>${escapeHtml(pl.name)}</h2><div class="sub">${g.citiesOf(pl.id).length} из ${g.cities.length} городов · для победы нужно ${Math.ceil(g.cities.length * WIN_SHARE)}</div></div></div>`;
     const tabs = [['treasury', 'Казна'], ['trade', 'Рынок'], ['cities', 'Города'], ['armies', 'Армии'], ['rivals', 'Соперники']];
+    for (const t of UIExt.kingdomTabs) tabs.push([t.id, t.title]);
+    const extTab = UIExt.kingdomTabs.find(t => t.id === this.kTab);
     h += '<div class="tabs">' + tabs.map(([v, n]) => `<button type="button" data-act="ktab" data-v="${v}" class="${this.kTab === v ? 'on' : ''}">${n}</button>`).join('') + '</div>';
-    if (this.kTab === 'treasury') {
+    if (extTab) {
+      h += extTab.html(g, pl, this);
+    } else if (this.kTab === 'treasury') {
       h += '<table class="t"><thead><tr><th></th>' + RES.map(r => `<th class="num" style="color:${r.color}">${Icons.svg(r.id)}</th>`).join('') + '</tr></thead><tbody>';
       for (const [key, name] of [['cities', 'Города'], ['upkeep', 'Войска'], ['factory', 'Мануфактуры'], ['total', 'Итого в минуту']]) {
         h += `<tr><td>${name}</td>` + RES.map(r => `<td class="num" data-live="inc-${key}-${r.id}"></td>`).join('') + '</tr>';

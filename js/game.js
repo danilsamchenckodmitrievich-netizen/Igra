@@ -50,6 +50,7 @@ class Game {
     this.fx = [];
     if (save) this.restore(save);
     else this.setup();
+    Mods.call('init', this, !!save);
     this.refreshTerritory(true);
     this.updateVisibility();
   }
@@ -180,8 +181,10 @@ class Game {
 
   // ---------- сохранение ----------
   serialize() {
+    const mods = {};
+    for (const m of Mods.list) if (m.serialize) mods[m.name] = m.serialize(this);
     return {
-      v: 1, opts: this.opts, time: this.time, nextId: this.nextId, rng: this.rng.state,
+      v: 1, opts: this.opts, mods, time: this.time, nextId: this.nextId, rng: this.rng.state,
       banditT: this.banditT, eventT: this.eventT, winner: this.winner,
       kingdoms: this.kingdoms.map(k => ({ ...k })),
       cities: this.cities.map(c => { const o = { ...c }; delete o.tiles; return o; }),
@@ -201,12 +204,14 @@ class Game {
     const ex = b64ToBytes(s.explored);
     if (ex.length === this.explored.length) this.explored.set(ex);
     this.reindex();
+    for (const m of Mods.list) if (m.restore) m.restore(this, (s.mods || {})[m.name]);
   }
 
   // ---------- запросы ----------
   citiesOf(kid) { return this.cities.filter(c => c.owner === kid); }
   armiesOf(kid) { return this.armies.filter(a => a.owner === kid); }
-  isHostile(a, b) { return a !== b; }
+  // враждебны ли две державы (id); дипломатия может заключить мир или союз
+  isHostile(a, b) { return Mods.mod('hostile', this, a !== b, a, b); }
   cityTile(c) { return this.world.idx(c.x, c.y); }
   cityAt(x, y, r) {
     let best = null, bd = r || 1.2;
@@ -253,7 +258,7 @@ class Game {
       out.armies = Math.min(I.armyMax, own);
       out.enemies = -Math.min(I.enemyMax, foe);
     }
-    out.reach = clamp(out.base + out.pop + out.garrison + out.armies + out.enemies, I.min, I.max);
+    out.reach = clamp(Mods.mod('influence', this, out.base + out.pop + out.garrison + out.armies + out.enemies, c, out), I.min, I.max);
     return out;
   }
   // Перекроить земли, если чья-то сила заметно изменилась или город сменил хозяина (force — сразу).
@@ -429,7 +434,7 @@ class Game {
       for (const r in b.yield) out[r] += b.yield[r] * lv * f;
     }
     if (c.siegeBy) { out.gold *= 0.3; out.wood *= 0.3; out.stone *= 0.3; out.iron *= 0.3; if (out.food > 0) out.food *= 0.3; }
-    return out;
+    return Mods.mod('cityIncome', this, out, c, k);
   }
   // Полный расчёт доходов державы за минуту с разбивкой.
   income(k) {
@@ -499,7 +504,7 @@ class Game {
     if (this.isWinter()) s *= 0.8;
     const k = this.kingdom(a.owner);
     if (k && (k.unpaid || k.starving)) s *= 0.85;
-    return s;
+    return Mods.mod('armySpeed', this, s, a);
   }
   armyVision(a) {
     return a.units.scout ? UNITS.scout.vision : COMBAT.armyVision;
@@ -1060,6 +1065,7 @@ class Game {
       this.aiT += dt;
       if (this.aiT >= 0.5) { AI.update(this, this.aiT); this.aiT = 0; }
     }
+    Mods.call('update', this, dt);
     this.updateFx(dt);
   }
 
@@ -1070,7 +1076,7 @@ class Game {
       if (a.state === 'battle' || a.immuneUntil > this.time) continue;
       for (let j = i + 1; j < arr.length; j++) {
         const b = arr[j];
-        if (b.owner === a.owner || b.state === 'battle' || b.immuneUntil > this.time) continue;
+        if (!this.isHostile(a.owner, b.owner) || b.state === 'battle' || b.immuneUntil > this.time) continue;
         if (Math.abs(a.x - b.x) > COMBAT.contact || Math.abs(a.y - b.y) > COMBAT.contact) continue;
         if (dist(a.x, a.y, b.x, b.y) > COMBAT.contact) continue;
         // разбойники не трогают друг друга

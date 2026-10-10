@@ -574,3 +574,5 @@ table.t tr.click:hover td { background: rgba(215, 169, 68, 0.15); }
   55%, 100% { transform: rotate(0deg); }
 }
 @media (prefers-reduced-motion: reduce) { .rotate-phone .rp-device { animation: none; } }
+
+#map.tool { cursor: crosshair; }

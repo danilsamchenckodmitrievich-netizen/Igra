@@ -1,7 +1,7 @@
 // Сохранение и загрузка: состояние после restore() совпадает, партия продолжается, инварианты держатся.
 const load = require('./load');
 process.env.EXPORTS = 'Game, AI, unitPower, menCount';
-const X = load(['util.js', 'data.js', 'world.js', 'game.js', 'ai.js']);
+const X = load();
 const g = new X.Game({ seed: 4242, size: 'medium', rivals: 4, difficulty: 'normal', kingdom: 2 });
 const pl = g.player; pl.ai = { nextThink: 0, target: null };
 for (let i = 0; i < 6000; i++) { g.update(0.1); pl.ai.nextThink -= 0.1; if (pl.ai.nextThink <= 0) { pl.ai.nextThink = 4; X.AI.think(g, pl); } }

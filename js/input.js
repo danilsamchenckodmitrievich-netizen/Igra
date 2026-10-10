@@ -62,13 +62,28 @@ class Input {
     r.clampCam();
   }
 
+  // Инструмент модуля (рисование фронта, стройка стен) забирает себе касания одним пальцем;
+  // двумя пальцами карта по-прежнему двигается и масштабируется. tool: { down, move, up, cancel } в координатах мира.
+  setTool(t) {
+    if (this.tool && this.tool !== t && this.tool.cancel) this.tool.cancel(this);
+    this.tool = t || null;
+    this.canvas.classList.toggle('tool', !!this.tool);
+  }
+
   down(e) {
     Sfx.resume();
     if (!this.app.playing()) return;
     this.r.glide = null;
     try { this.canvas.setPointerCapture(e.pointerId); } catch (err) { /* не обязательно */ }
-    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, moved: false, button: e.button, type: e.pointerType });
+    const pt = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, moved: false, button: e.button, type: e.pointerType };
+    this.pointers.set(e.pointerId, pt);
+    if (this.tool && this.pointers.size === 1 && e.button !== 2) {
+      pt.tool = true;
+      if (this.tool.down) this.tool.down(this.r.toWorld(e.clientX, e.clientY), e, this);
+      return;
+    }
     if (this.pointers.size === 2) {
+      for (const q of this.pointers.values()) if (q.tool) { q.tool = false; if (this.tool && this.tool.cancel) this.tool.cancel(this, true); }
       const [a, b] = [...this.pointers.values()];
       this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
       for (const p of this.pointers.values()) p.moved = true;
@@ -78,6 +93,11 @@ class Input {
   move(e) {
     const p = this.pointers.get(e.pointerId);
     if (!p || !this.app.playing()) return;
+    if (p.tool && this.tool) {
+      p.x = e.clientX; p.y = e.clientY;
+      if (this.tool.move) this.tool.move(this.r.toWorld(e.clientX, e.clientY), e, this);
+      return;
+    }
     const dx = e.clientX - p.x, dy = e.clientY - p.y;
     p.x = e.clientX; p.y = e.clientY;
     const r = this.r;
@@ -105,6 +125,10 @@ class Input {
     if (!p) return;
     this.pointers.delete(e.pointerId);
     if (this.pointers.size < 2) this.pinch = null;
+    if (p.tool && this.tool) {
+      if (this.tool.up) this.tool.up(this.r.toWorld(e.clientX, e.clientY), e, this, !!cancel);
+      return;
+    }
     if (cancel || p.moved || !this.app.playing()) return;
     this.tap(p.x, p.y, p.button === 2);
   }
@@ -163,6 +187,7 @@ class Input {
     const app = this.app;
     if (!app.game || app.mode !== 'game') return;
     const k = e.code;
+    if (k === 'Escape' && this.tool) { this.setTool(null); return; }
     if (k === 'Escape') {
       e.preventDefault();
       if (app.ui.sel) app.ui.select(null);

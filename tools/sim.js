@@ -1,7 +1,7 @@
 // Прогон партии без браузера: node tools/sim.js <минут> <seed> [size] [difficulty]; PLAYER_AI=1 — игроком тоже правит ИИ.
 const load = require('./load');
 process.env.EXPORTS = 'Game, AI, unitPower, menCount, MAP_SIZES';
-const X = load(['util.js', 'data.js', 'world.js', 'game.js', 'ai.js']);
+const X = load();
 const minutes = +(process.argv[2] || 20), seed = +(process.argv[3] || 777), size = process.argv[4] || 'medium', diff = process.argv[5] || 'normal';
 const g = new X.Game({ seed, size, rivals: 4, difficulty: diff, kingdom: 0 });
 let caps = 0, battles = 0, sieges = 0, events = [];

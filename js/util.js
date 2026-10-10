@@ -126,3 +126,22 @@ function fmtTime(t) {
   const s = Math.max(0, Math.ceil(t));
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
+
+// Модули игры (дивизии и фронты, общество, дипломатия, полководцы, флот, основание городов, кампания)
+// живут в своих файлах и подключаются к Game через Mods: Mods.add({ name, init, update, serialize, restore, modify: { … } }).
+// init(g, loaded) — после создания или загрузки партии; update(g, dt) — каждый шаг; serialize(g) → данные для сохранения;
+// restore(g, data) — при загрузке (data может отсутствовать в старых сохранениях); modify.<имя>(g, значение, …) → новое значение.
+const Mods = {
+  list: [],
+  add(m) { this.list.push(m); return m; },
+  get(name) { for (const m of this.list) if (m.name === name) return m; return null; },
+  call(fn, g, a, b, c) { for (const m of this.list) if (m[fn]) m[fn](g, a, b, c); },
+  mod(key, g, v, a, b, c) {
+    for (const m of this.list) if (m.modify && m.modify[key]) v = m.modify[key](g, v, a, b, c);
+    return v;
+  },
+};
+// Расширения интерфейса: вкладки панели державы, строки в шапке города, разделы города, обработчики data-act,
+// слои отрисовки и инструменты ввода (рисование фронта, стройка стен).
+const UIExt = { kingdomTabs: [], cityHeader: [], citySections: [], actions: {}, armyPanel: null };
+const RenderExt = { map: [], screen: [] };
