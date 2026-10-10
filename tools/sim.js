@@ -4,10 +4,11 @@ process.env.EXPORTS = 'Game, AI, unitPower, menCount, MAP_SIZES';
 const X = load();
 const minutes = +(process.argv[2] || 20), seed = +(process.argv[3] || 777), size = process.argv[4] || 'medium', diff = process.argv[5] || 'normal';
 const g = new X.Game({ seed, size, rivals: 4, difficulty: diff, kingdom: 0 });
-let caps = 0, battles = 0, sieges = 0, events = [];
+let caps = 0, battles = 0, sieges = 0, founded = 0, events = [];
 g.on((t, d) => {
   if (t === 'captured') { caps++; events.push(`${(g.time/60).toFixed(1)}m ${d.to.name} взяло ${d.city.name}${d.from ? ' у ' + d.from.name : ''}`); }
   if (t === 'battle') battles++;
+  if (t === 'founded') { founded++; events.push(`${(g.time/60).toFixed(1)}m ${d.kingdom.name} основало город ${d.city.name}`); }
   if (t === 'siege') sieges++;
   if (t === 'eliminated') events.push(`${(g.time/60).toFixed(1)}m ПАЛО: ${d.name}`);
 });
@@ -36,3 +37,4 @@ console.log('gameover/winner', g.winner);
 console.log(`итог: ${(g.time / 60).toFixed(1)} мин, захватов ${caps}, осад ${sieges}, ${((Date.now() - t0) / 1000).toFixed(1)} с; победитель ${g.winner}`);
 const neutral = g.cities.filter(c => c.owner === -1).length;
 console.log('вольных городов осталось', neutral, 'из', g.cities.length);
+if (g.fd) { const ws = [...g.fd.walls.values()]; console.log(`основано городов ${founded}, обозов в пути ${g.fd.settlers.length}, участков стен ${ws.filter(r => r.l > 0).length} (строится ${ws.filter(r => r.t > r.l).length}), обломков ${g.fd.rubble.size}`); }

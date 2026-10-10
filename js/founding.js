@@ -7,7 +7,7 @@
 
 const FOUND = {
   pop: 150,                                   // жителей уходит с обозом
-  cost: { gold: 240, food: 180, wood: 160 },
+  cost: { gold: 200, food: 180, wood: 160 },
   minLevel: 2,                                // из города не ниже «Городка»
   keepPop: 250,                               // и в городе после ухода должно остаться не меньше
   minDist: 6,                                 // клеток до ближайшего города
@@ -42,8 +42,8 @@ const FWALL = {
   repair: 0.5,         // прочность в секунду у целой стены, которую давно не били
   calm: 10,            // секунд без ударов до ремонта
   rubble: 240,         // сколько живут обломки
-  aiFrom: 400, aiEvery: [50, 85], aiCap: 48, aiChunk: 16, aiNear: 17,
-  aiReserve: { gold: 350, wood: 300, stone: 300, iron: 100, food: 0 },
+  aiFrom: 400, aiEvery: [50, 85], aiCap: 48, aiChunk: 12, aiNear: 17,
+  aiReserve: { gold: 10, wood: 120, stone: 120, iron: 40, food: 0 },
 };
 
 // клетки по прямой, 4-связные (шаг только по вертикали или горизонтали): стена не пропускает «по диагонали»
@@ -566,14 +566,8 @@ const Founding = {
       if (!k.alive || k.bandit || !k.ai) continue;
       const st = fd.aiT[k.id] || (fd.aiT[k.id] = { f: FOUND.aiFrom + g.rng.range(0, 120), w: FWALL.aiFrom + g.rng.range(0, 60) });
       for (const s of this.settlersOf(g, k.id)) if (s.st === 'wait') { if (!this.aiSend(g, k, s)) this.disband(g, s); }
-      if (g.time >= st.f) {
-        st.f = g.time + g.rng.range(FOUND.aiEvery[0], FOUND.aiEvery[1]);
-        this.aiFound(g, k);
-      }
-      if (g.time >= st.w) {
-        st.w = g.time + g.rng.range(FWALL.aiEvery[0], FWALL.aiEvery[1]);
-        this.aiWall(g, k);
-      }
+      if (g.time >= st.f) st.f = g.time + (this.aiFound(g, k) ? g.rng.range(FOUND.aiEvery[0], FOUND.aiEvery[1]) : 4);
+      if (g.time >= st.w) st.w = g.time + (this.aiWall(g, k) ? g.rng.range(FWALL.aiEvery[0], FWALL.aiEvery[1]) : 6);
     }
   },
   // Лучшая клетка для города рядом с городами державы; null — негде.
@@ -611,21 +605,29 @@ const Founding = {
     const site = this.aiSite(g, k, { x: Math.round(s.x), y: Math.round(s.y) });
     return !!site && this.send(g, s, site.x, site.y) === null;
   },
+  // true — попытка сделана (успешно или некуда), false — не хватило запасов: проверим скоро снова
   aiFound(g, k) {
     const fd = g.fd;
-    if ((fd.made[k.id] || 0) >= FOUND.aiMax || this.settlersOf(g, k.id).length) return;
+    if ((fd.made[k.id] || 0) >= FOUND.aiMax || this.settlersOf(g, k.id).length) return true;
     const R = FOUND.cost;
-    if (k.res.gold < R.gold + 300 || k.res.food < R.food + 250 || k.res.wood < R.wood + 200) return;
+    if (k.res.gold < R.gold + 20 || k.res.food < R.food + 60 || k.res.wood < R.wood + 40) return false;
     // из спокойного города, где достаточно людей
     const cs = g.citiesOf(k.id).filter(c => c.level >= FOUND.minLevel && !c.siegeBy && c.pop >= FOUND.pop + 400 && !this.menaced(g, c));
-    if (!cs.length) return;
+    const st = fd.aiT[k.id];
+    if (!cs.length) { st.no = g.time; return true; }
     cs.sort((a, b) => b.pop - a.pop);
     const from = cs[0], site = this.aiSite(g, k, from);
-    if (!site) return;
+    if (!site) { st.no = g.time; return true; }
     const s = this.equip(g, from);
-    if (typeof s === 'string') return;
+    if (typeof s === 'string') return true;
     if (this.send(g, s, site.x, site.y) === null) fd.made[k.id] = (fd.made[k.id] || 0) + 1;
     else this.disband(g, s);
+    return true;
+  },
+  // ИИ копит золото на обоз: ai.js тогда не тратит последнее на мелочи (как при нехватке войска)
+  aiSaves(g, k) {
+    const fd = g.fd, st = fd && fd.aiT[k.id];
+    return !!st && g.time >= st.f - 70 && g.time - (st.no || -999) > 400 && (fd.made[k.id] || 0) < FOUND.aiMax && k.res.gold < FOUND.cost.gold + 20 && !this.settlersOf(g, k.id).length;
   },
   menaced(g, c) {
     for (const a of g.armies) if (a.owner !== c.owner && g.isHostile(c.owner, a.owner) && dist(a.x, a.y, c.x, c.y) < 10) return true;
@@ -655,10 +657,11 @@ const Founding = {
     }
     return out;
   },
+  // true — решение принято (построили или стена не нужна), false — не хватило запасов: проверим скоро снова
   aiWall(g, k) {
     const fd = g.fd;
     const cs = g.citiesOf(k.id);
-    if (cs.length < 2) return;
+    if (cs.length < 2) return true;
     // город, ближе всего стоящий к вражескому
     let from = null, foe = null, bd = FWALL.aiNear;
     for (const c of cs) {
@@ -669,10 +672,10 @@ const Founding = {
         if (d < bd) { bd = d; from = c; foe = e; }
       }
     }
-    if (!from) return;
+    if (!from) return true;
     let have = 0;
     for (const rec of fd.walls.values()) if (rec.o === k.id) have++;
-    if (have >= FWALL.aiCap) return;
+    if (have >= FWALL.aiCap) return true;
     const reach = g.cityInfluence(from).reach;
     let cells = [];
     for (let r = clamp(Math.floor(reach - 0.8), 3, 7); r >= 3; r--) {
@@ -680,9 +683,10 @@ const Founding = {
       if (arc.length > cells.length) cells = arc;
       if (arc.length >= r * 1.6) break;
     }
-    if (cells.length < 3) return;
+    if (cells.length < 3) return true;
     const stone = k.res.stone, iron = k.res.iron;
     const level = stone > 900 && iron > 220 && g.time > 900 ? 3 : stone > 520 ? 2 : 1;
+    let short = false;
     for (let lv = level; lv >= 1; lv--) {
       const todo = cells.filter(i => { const r = fd.walls.get(i); return !r || (r.t < lv && r.l < lv); }).slice(0, FWALL.aiChunk);
       if (!todo.length) continue;
@@ -690,8 +694,10 @@ const Founding = {
       if (!plan.n) continue;
       let ok = true;
       for (const r in plan.cost) if ((k.res[r] || 0) - plan.cost[r] < (FWALL.aiReserve[r] || 0)) ok = false;
-      if (ok) { this.buildWalls(g, k.id, todo, lv); return; }
+      if (ok) { this.buildWalls(g, k.id, todo, lv); return true; }
+      short = true;
     }
+    return !short;
   },
 
   // ---------- интерфейс (заменяется в браузере ниже) ----------
