@@ -863,6 +863,9 @@ const DipView = typeof document === 'undefined' ? null : {
     if (typeof App === 'undefined' || !App.ui) return;
     App.ui.kTab = 'dip';
     App.ui.select({ kind: 'kingdom' });
+    // вкладка «Дипломатия» — последняя в ряду и на узком экране может уйти за край
+    const b = document.querySelector('#panel-body .tabs button.on');
+    if (b && b.scrollIntoView) { try { b.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {} }
   },
   refreshPanel() {
     if (typeof App === 'undefined' || !App.ui || !App.ui.sel) return;
