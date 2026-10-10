@@ -189,6 +189,7 @@ button:focus-visible { outline: 2px solid var(--gold-hi); outline-offset: 2px; }
 .r-iron { color: #4d6c8c; }
 .infl { margin-left: auto; cursor: pointer; font: inherit; font-size: 14px; min-height: 32px; transition: background-color 0.15s; }
 .infl .chev { width: 7px; height: 7px; border-right: 2px solid var(--ink-soft); border-bottom: 2px solid var(--ink-soft); transform: translateY(-2px) rotate(45deg); margin-left: 2px; transition: transform 0.2s; }
+.infl small { margin-left: -2px; font-size: 12px; color: var(--ink-soft); }
 .infl.on { background: rgba(215, 169, 68, 0.3); border-color: #8a6420; }
 .infl.on .chev { transform: translateY(1px) rotate(-135deg); }
 .infl-d { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: rgba(255, 250, 235, 0.7); border: 1px solid rgba(167, 135, 86, 0.6); animation: paneIn 0.2s ease-out; }
@@ -497,6 +498,8 @@ table.t tr.click:hover td { background: rgba(215, 169, 68, 0.15); }
   .help-cols { grid-template-columns: 1fr; }
 }
 @media (max-height: 520px) {
+  #feed .msg:nth-child(n+4) { display: none; }
+  .msg { font-size: 13px; padding: 4px 8px; }
   #coach p { font-size: 14px; margin-bottom: 6px; }
   #coach { padding: 8px 10px; }
   #left { width: min(340px, 44vw); }

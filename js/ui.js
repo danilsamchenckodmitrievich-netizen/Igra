@@ -70,6 +70,12 @@ function morphNode(a, b) {
   if (!live) morphChildren(a, b);
 }
 
+// Базовая дальность влияния города по уровню (без жителей и войск) — для таблицы «сейчас → дальше».
+function inflBase(level) {
+  const v = typeof INFLUENCE !== 'undefined' ? INFLUENCE.base[level] : CITY_LEVELS[level].radius;
+  return String(Math.round(v * 10) / 10).replace('.', ',');
+}
+
 class UI {
   constructor(app) {
     this.app = app;
@@ -399,7 +405,7 @@ class UI {
       }
       if (inf) {
         h += `<button type="button" class="chip infl${this.inflOpen ? ' on' : ''}" data-act="infl" aria-expanded="${this.inflOpen}" title="Влияние: сколько земли держит город">` +
-          `${Icons.svg('influence')}<span>Влияние</span><b>${inf.tiles}</b><i class="chev"></i></button>`;
+          `${Icons.svg('influence')}<span>Влияние</span><b>${inf.tiles}</b><small>кл.</small><i class="chev"></i></button>`;
       }
       h += '</div>';
       if (inf && this.inflOpen) h += this.inflHtml(inf);
@@ -546,7 +552,7 @@ class UI {
     if (kind === 'level') {
       const L = CITY_LEVELS[c.level], N = CITY_LEVELS[c.level + 1];
       art = 'level'; title = 'Уровень города'; cur = L.name; lv = c.level; max = MAX_CITY_LEVEL;
-      rows = [['Жителей до', fmtInt(L.popMax), N && fmtInt(N.popMax)], ['Мест под здания', L.slots, N && N.slots], ['Радиус земель', L.radius, N && N.radius]];
+      rows = [['Жителей до', fmtInt(L.popMax), N && fmtInt(N.popMax)], ['Мест под здания', L.slots, N && N.slots], ['Влияние, клеток', inflBase(c.level), N && inflBase(c.level + 1)]];
     } else if (kind === 'walls') {
       const w0 = WALLS[c.walls], w1 = WALLS[c.walls + 1];
       art = (w1 ? c.walls + 1 : c.walls) >= 2 ? 'walls' : 'palisade'; title = 'Стены'; cur = w0 ? w0.name : 'Стен нет'; lv = c.walls; max = WALLS.length - 1;

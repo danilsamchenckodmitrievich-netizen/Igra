@@ -15,6 +15,8 @@ require('fs').mkdirSync(OUT, { recursive: true });
   page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') errors.push('console: ' + m.text()); });
   await page.goto('file://' + require('path').resolve(__dirname, '..', 'index.html'));
   await page.waitForTimeout(2500);
+  // в вертикальном положении телефона сначала просят повернуть экран
+  if (await page.evaluate(() => !document.getElementById('rotate').hidden)) await page.click('#rotate-ok');
   await page.screenshot({ path: require('path').join(OUT, `${pre}1-menu.png`) });
   await page.click('#new-btn');
   await page.waitForTimeout(300);
