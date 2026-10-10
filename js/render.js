@@ -93,19 +93,10 @@ class Renderer {
     return shade(TERRAIN_COLORS[t], 0.97 + tileHash(i, 1) * 0.06);
   }
 
-  // Цвета клеток в картинке 1 пиксель = 1 клетка; при увеличении сглаживаются в мягкую заливку.
+  // Картинка суши 1 пиксель = 1 клетка (при увеличении сглаживается в мягкую заливку); заодно WorldArt
+  // готовит картинку воды с глубинами и прочие заготовки мира.
   buildBaseImage() {
-    const w = this.g.world;
-    const cv = document.createElement('canvas');
-    cv.width = w.W; cv.height = w.H;
-    const c = cv.getContext('2d');
-    const img = c.createImageData(w.W, w.H);
-    for (let i = 0; i < w.W * w.H; i++) {
-      const n = parseInt(this.terrainColor(w.terrain[i], i).slice(1), 16);
-      img.data[i * 4] = (n >> 16) & 255; img.data[i * 4 + 1] = (n >> 8) & 255; img.data[i * 4 + 2] = n & 255; img.data[i * 4 + 3] = 255;
-    }
-    c.putImageData(img, 0, 0);
-    return cv;
+    return WorldArt.prepareWorld(this);
   }
 
   // Изолиния двоичного поля по центрам клеток (марширующие квадраты). Отрезки сшиваются в цепочки
@@ -193,68 +184,9 @@ class Renderer {
     if (closed) p.closePath();
   }
 
-  bakeChunk(cx, cy) {
-    const g = this.g, w = g.world, W = w.W;
-    const cv = document.createElement('canvas');
-    cv.width = cv.height = CH * TP;
-    const c = cv.getContext('2d');
-    c.scale(TP, TP);
-    c.translate(-cx * CH, -cy * CH);
-    const x0 = Math.max(0, cx * CH - 1), x1 = Math.min(W - 1, cx * CH + CH);
-    const y0 = Math.max(0, cy * CH - 1), y1 = Math.min(w.H - 1, cy * CH + CH + 1);
-    // мягкая заливка местности
-    c.imageSmoothingEnabled = true;
-    c.drawImage(this.baseImg, 0, 0, W, w.H);
-    // береговая линия
-    c.lineCap = 'round'; c.lineJoin = 'round';
-    c.strokeStyle = 'rgba(245,236,205,0.55)'; c.lineWidth = 0.22;
-    c.stroke(this.coast);
-    c.strokeStyle = 'rgba(70,52,30,0.75)'; c.lineWidth = 0.07;
-    c.stroke(this.coast);
-    // волны и бумажная фактура
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const i = y * W + x;
-      const t = w.terrain[i];
-      if (t === T.DEEP && tileHash(i, 3) < 0.22) {
-        c.strokeStyle = 'rgba(220,235,240,0.35)';
-        c.lineWidth = 0.05;
-        const ox = x + 0.25 + tileHash(i, 4) * 0.4, oy = y + 0.4 + tileHash(i, 5) * 0.3;
-        c.beginPath();
-        c.arc(ox, oy, 0.14, Math.PI * 1.1, Math.PI * 1.9);
-        c.arc(ox + 0.27, oy, 0.14, Math.PI * 1.1, Math.PI * 1.9);
-        c.stroke();
-      }
-      c.fillStyle = 'rgba(60,40,20,0.06)';
-      for (let k = 0; k < 3; k++) c.fillRect(x + tileHash(i, 10 + k), y + tileHash(i, 20 + k), 0.06, 0.06);
-    }
-    // реки
-    c.lineCap = 'round'; c.lineJoin = 'round';
-    for (const r of this.riverLines) this.smoothLine(c, r, 0.46, '#4c7d93');
-    for (const r of this.riverLines) this.smoothLine(c, r, 0.3, '#7ab3c8');
-    // дороги
-    c.setLineDash([0.32, 0.2]);
-    for (const r of w.roads) this.smoothLine(c, r, 0.16, 'rgba(110,78,40,0.85)');
-    c.setLineDash([]);
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const i = y * W + x;
-      if (w.road[i] && w.river[i]) {
-        c.fillStyle = '#8a643a';
-        c.fillRect(x + 0.25, y + 0.3, 0.5, 0.4);
-        c.strokeStyle = '#4e3418'; c.lineWidth = 0.04;
-        c.strokeRect(x + 0.25, y + 0.3, 0.5, 0.4);
-      }
-    }
-    // объекты местности сверху вниз, чтобы нижние перекрывали верхние
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const i = y * W + x;
-      const t = w.terrain[i];
-      if (w.road[i] && t !== T.MOUNTAIN && t !== T.SNOW) continue;
-      if (t === T.FOREST) this.drawTrees(c, x, y, i);
-      else if (t === T.HILLS) this.drawHill(c, x, y, i);
-      else if (t === T.MOUNTAIN || t === T.SNOW) this.drawMountain(c, x, y, i, t === T.SNOW);
-      else if (t === T.PLAINS && tileHash(i, 30) < 0.14) this.drawTuft(c, x, y, i);
-    }
-    return cv;
+  // Кусок местности CH×CH клеток при tp пикселях на клетку: вода, суша, реки, дороги, леса, горы (js/art-world.js).
+  bakeChunk(cx, cy, tp) {
+    return WorldArt.bakeTerrain(this, cx, cy, tp || TP);
   }
 
   // Реки текут по клеткам и выходят прямыми; для рисунка слегка изгибаем их поперёк течения (в пределах клетки).
@@ -285,76 +217,29 @@ class Renderer {
     c.stroke();
   }
 
-  drawTrees(c, x, y, i) {
-    const n = 2 + (tileHash(i, 40) < 0.5 ? 1 : 0);
-    for (let k = 0; k < n; k++) {
-      const tx = x + 0.2 + tileHash(i, 41 + k) * 0.6, ty = y + 0.25 + tileHash(i, 51 + k) * 0.55;
-      const r = 0.17 + tileHash(i, 61 + k) * 0.08;
-      c.fillStyle = 'rgba(40,50,20,0.25)';
-      c.beginPath(); c.ellipse(tx + 0.05, ty + r * 0.9, r, r * 0.45, 0, 0, TAU); c.fill();
-      c.fillStyle = '#5a4128';
-      c.fillRect(tx - 0.025, ty, 0.05, r * 0.9);
-      c.fillStyle = '#3f6a2f';
-      c.beginPath(); c.arc(tx, ty - r * 0.2, r, 0, TAU); c.fill();
-      c.fillStyle = '#5d8a45';
-      c.beginPath(); c.arc(tx - r * 0.3, ty - r * 0.45, r * 0.5, 0, TAU); c.fill();
-      c.strokeStyle = 'rgba(30,40,15,0.6)'; c.lineWidth = 0.025;
-      c.beginPath(); c.arc(tx, ty - r * 0.2, r, 0, TAU); c.stroke();
-    }
-  }
-  drawHill(c, x, y, i) {
-    const n = tileHash(i, 70) < 0.5 ? 1 : 2;
-    for (let k = 0; k < n; k++) {
-      const hx = x + 0.2 + tileHash(i, 71 + k) * 0.6, hy = y + 0.65 + tileHash(i, 81 + k) * 0.25;
-      const r = 0.3 + tileHash(i, 91 + k) * 0.12;
-      c.fillStyle = '#a58d5c';
-      c.beginPath(); c.ellipse(hx, hy, r, r * 0.75, 0, Math.PI, 0); c.closePath(); c.fill();
-      c.fillStyle = 'rgba(70,50,25,0.35)';
-      c.beginPath(); c.ellipse(hx, hy, r, r * 0.75, 0, Math.PI * 1.5, 0); c.lineTo(hx, hy); c.closePath(); c.fill();
-      c.strokeStyle = 'rgba(70,50,25,0.75)'; c.lineWidth = 0.035;
-      c.beginPath(); c.ellipse(hx, hy, r, r * 0.75, 0, Math.PI, 0); c.stroke();
-    }
-  }
-  drawMountain(c, x, y, i, snow) {
-    const mx = x + 0.5 + (tileHash(i, 100) - 0.5) * 0.3;
-    const base = y + 0.95;
-    const h = (snow ? 1.25 : 0.95) + tileHash(i, 101) * 0.3;
-    const wdt = 0.62 + tileHash(i, 102) * 0.2;
-    c.fillStyle = 'rgba(50,40,25,0.25)';
-    c.beginPath(); c.ellipse(mx + 0.1, base, wdt, 0.15, 0, 0, TAU); c.fill();
-    c.fillStyle = '#b9ac93';
-    c.beginPath(); c.moveTo(mx - wdt, base); c.lineTo(mx, base - h); c.lineTo(mx + wdt, base); c.closePath(); c.fill();
-    c.fillStyle = '#857762';
-    c.beginPath(); c.moveTo(mx, base - h); c.lineTo(mx + wdt, base); c.lineTo(mx + 0.05, base); c.closePath(); c.fill();
-    if (snow || h > 1.15) {
-      c.fillStyle = '#f4f2ec';
-      c.beginPath(); c.moveTo(mx - wdt * 0.36, base - h * 0.64); c.lineTo(mx, base - h); c.lineTo(mx + wdt * 0.36, base - h * 0.64);
-      c.lineTo(mx + 0.08, base - h * 0.72); c.lineTo(mx - 0.08, base - h * 0.6); c.closePath(); c.fill();
-    }
-    c.strokeStyle = '#4e4436'; c.lineWidth = 0.04;
-    c.beginPath(); c.moveTo(mx - wdt, base); c.lineTo(mx, base - h); c.lineTo(mx + wdt, base); c.stroke();
-  }
-  drawTuft(c, x, y, i) {
-    const tx = x + 0.2 + tileHash(i, 31) * 0.6, ty = y + 0.3 + tileHash(i, 32) * 0.5;
-    c.strokeStyle = 'rgba(80,95,40,0.55)'; c.lineWidth = 0.035;
-    c.beginPath();
-    c.moveTo(tx - 0.1, ty); c.lineTo(tx - 0.13, ty - 0.14);
-    c.moveTo(tx, ty); c.lineTo(tx, ty - 0.18);
-    c.moveTo(tx + 0.1, ty); c.lineTo(tx + 0.14, ty - 0.13);
-    c.stroke();
-  }
-
+  // Два разрешения кусков: 32 px на клетку издалека и 64 px вблизи на плотных экранах.
+  // Пока нужный кусок не запечён, показываем кусок другого разрешения, если он есть.
   getChunk(cx, cy, budget) {
-    const key = cx + ',' + cy;
+    const tp = this.cam.z * this.dpr > 44 ? TP * 2 : TP;
+    const key = cx + ',' + cy + ',' + tp;
     let ch = this.chunks.get(key);
     if (ch) { ch.used = this.frame; return ch.cv; }
-    if (budget.n <= 0) return null;
+    if (budget.n <= 0) {
+      const alt = this.chunks.get(cx + ',' + cy + ',' + (tp === TP ? TP * 2 : TP));
+      if (alt) { alt.used = this.frame; return alt.cv; }
+      return null;
+    }
     budget.n--;
-    ch = { cv: this.bakeChunk(cx, cy), used: this.frame };
+    ch = { cv: this.bakeChunk(cx, cy, tp), used: this.frame, cost: tp === TP ? 1 : 4 };
     this.chunks.set(key, ch);
-    if (this.chunks.size > 70) {
+    // память: кусок 64 px весит как четыре по 32 px
+    let total = 0;
+    for (const v of this.chunks.values()) total += v.cost || 1;
+    while (total > 72) {
       let oldK = null, oldT = Infinity;
-      for (const [k, v] of this.chunks) if (v.used < oldT) { oldT = v.used; oldK = k; }
+      for (const [k, v] of this.chunks) if (v.used < oldT && v.used < this.frame) { oldT = v.used; oldK = k; }
+      if (oldK === null) break;
+      total -= this.chunks.get(oldK).cost || 1;
       this.chunks.delete(oldK);
     }
     return ch.cv;
