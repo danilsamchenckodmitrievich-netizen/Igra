@@ -1,6 +1,18 @@
 'use strict';
 // Фигурки войск и анимация сражений: строй армии, походный шаг, рукопашная, стрелы, осадные машины.
 // Спрайты рисуются один раз в offscreen canvas и берутся из кэша.
+// У каждой державы свой облик войска по её пресету (CULTURES): render.js ничего не передаёт сверх цвета,
+// стиль узнаётся по цвету и по g.kingdoms (k.preset, k.bandit, k.rebel).
+//
+// API для других частей (контекст в css-пикселях, как у RenderExt.screen; size — рост воина, в строю Renderer.armySize() * 0.7):
+//   UnitArt.commander(ctx, x, y, size, kingdom, frame, pose?, dir?) — полководец на коне в плаще, с венцом и штандартом;
+//     x, y — копыта; pose: 'stand' | 'walk' | 'run'; dir: 1 вправо, -1 влево.
+//   UnitArt.ship(ctx, x, y, size, kingdom, kind, heading, frame) — kind: 'transport' (ладья с вёслами и войском) | 'war' (когг
+//     с башенками); x, y — ватерлиния под серединой; heading — курс в радианах; корпус ≈ 3·size; качка и вёсла по frame.
+//   UnitArt.wagon(ctx, x, y, size, kingdom, frame, dir?) — обоз переселенцев: крытая повозка, лошадь, переселенец.
+//   UnitArt.setStyle(color, style) — облик для нового цвета: 'north' | 'crimson' | 'forest' | 'gold' | 'order' | 'stone' |
+//     'rabble' (разбойники, мятежники) | 'common'; UnitArt.styleOf(color) — текущий облик цвета.
+//   frame — любое целое, растущее со временем (например, Math.floor(renderer.time * 8)).
 
 const UnitArt = (() => {
   const FORMATION_Z = 22;     // с этого увеличения (пикселей на клетку) армия рисуется строем фигурок
@@ -40,6 +52,18 @@ const UnitArt = (() => {
     return (h >>> 0) / 4294967296;
   }
   const smooth = t => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
+  // второй цвет геральдики: золото, а у золотой державы — её тёмный цвет, иначе узор сольётся
+  const metals = new Map();
+  function metal2(kc, kd) {
+    let m = metals.get(kc);
+    if (!m) {
+      const p = parseInt(kc.slice(1), 16), q = parseInt(PAL.gold.slice(1), 16);
+      const d = Math.abs(((p >> 16) & 255) - ((q >> 16) & 255)) + Math.abs(((p >> 8) & 255) - ((q >> 8) & 255)) + Math.abs((p & 255) - (q & 255));
+      m = d < 120 ? kd : PAL.gold;
+      metals.set(kc, m);
+    }
+    return m;
+  }
 
   // ---------- примитивы (координаты в долях роста, ступни в (0,0), лицом вправо) ----------
   function path(c, pts, close) {
@@ -231,8 +255,17 @@ const UnitArt = (() => {
     const bearer = uid.charAt(1) === ':';
     const base = bearer ? uid.slice(2) : uid;
     const C = CULTURES[st];
-    G = Object.assign({}, GEAR[base] || GEAR.militia);
-    if (C && !G.machine) Object.assign(G, C.all || null, C[base] || null);
+    if (base === 'commander') {
+      // полководец: рыцарь своей культуры в плаще, со штандартом и золотым венцом
+      G = Object.assign({}, GEAR.knight, C ? C.all : null, C ? C.knight : null, { weapon: 'pole', two: false, cape: true, crown: true, back: null, build: null });
+    } else if (base === 'settler') {
+      // переселенец с посохом
+      G = Object.assign({}, GEAR.militia, C ? C.all : null, C ? C.militia : null, { weapon: 'staff', two: false, shield: null, cape: false, beard: st === 'stone' ? 'long' : null });
+      if (G.torso !== 'rags') G.torso = 'peasant';
+    } else {
+      G = Object.assign({}, GEAR[base] || GEAR.militia);
+      if (C && !G.machine) Object.assign(G, C.all || null, C[base] || null);
+    }
     if (C && G.machine) G.shieldType = (C.spear && C.spear.shield) || null;
     if (G.beard) G.beardCol = BEARD_COLS[Math.floor(hash(base.length * 7 + base.charCodeAt(0) * 13 + st.length) * BEARD_COLS.length)];
     if (st === 'stone' && base === 'knight') G.beardCol = '#cfc6b8';
@@ -371,6 +404,9 @@ const UnitArt = (() => {
         if (G.shield) P.hf = run ? [-0.06, 0.24] : [0.12, 0.22];
         break;
       }
+      case 'staff':
+        P.hn = [0.16 - sw * 0.3, 0.17];
+        break;
       default:
         P.hn = [0.06 - sw, 0.31];
     }
@@ -498,7 +534,7 @@ const UnitArt = (() => {
       c.fillRect(mx - 0.022, ty, 0.044, hy + sk - ty);
       c.fillRect(mx - 0.075, ty + 0.085, 0.15, 0.042);
     } else if (G.coat === 'quarter') {
-      c.fillStyle = PAL.gold;
+      c.fillStyle = metal2(kc, kd);
       c.fillRect(mx, ty, 0.2, (hy - ty) * 0.55); c.fillRect(mx - 0.2, ty + (hy - ty) * 0.55, 0.2, 0.4);
     }
     c.fillStyle = 'rgba(30,15,5,0.16)'; c.fillRect(tx - 0.12, ty, 0.08, hy + sk - ty);
@@ -709,7 +745,7 @@ const UnitArt = (() => {
       case 'bare': {
         const hair = '#3d2a1a';
         disc(c, x - 0.015, y - 0.012, 0.108, hair);
-        poly(c, [x - 0.1, y - 0.06, x - 0.07, y - 0.15, x - 0.03, y - 0.09, x + 0.0, y - 0.16, x + 0.03, y - 0.09, x + 0.07, y - 0.13, x + 0.06, y - 0.05], hair);
+        poly(c, [x - 0.11, y - 0.02, x - 0.1, y - 0.1, x - 0.05, y - 0.13, x + 0.0, y - 0.115, x + 0.05, y - 0.12, x + 0.08, y - 0.06], hair);
         face(x + 0.035, y + 0.015);
         return true;
       }
@@ -873,8 +909,8 @@ const UnitArt = (() => {
         if (type === 'cross') {
           c.fillStyle = kc; c.fillRect(x - 0.025, y - 0.17, 0.05, 0.4); c.fillRect(x - 0.13, y - 0.06, 0.26, 0.05);
         } else {
-          c.fillStyle = PAL.gold; c.fillRect(x, y - 0.17, 0.13, 0.15); c.fillRect(x - 0.13, y - 0.02, 0.13, 0.25);
-          c.fillStyle = kd; c.beginPath(); c.arc(x + 0.055, y - 0.095, 0.03, 0, TAU); c.fill();
+          c.fillStyle = metal2(kc, kd); c.fillRect(x, y - 0.17, 0.13, 0.15); c.fillRect(x - 0.13, y - 0.02, 0.13, 0.25);
+          c.fillStyle = kc; c.beginPath(); c.arc(x + 0.055, y - 0.095, 0.03, 0, TAU); c.fill();
           c.fillStyle = PAL.light; c.beginPath(); c.arc(x - 0.06, y - 0.09, 0.025, 0, TAU); c.fill();
         }
         c.fillStyle = 'rgba(30,15,5,0.2)'; c.fillRect(x - 0.13, y - 0.17, 0.11, 0.4);
@@ -1082,6 +1118,11 @@ const UnitArt = (() => {
     torso(c, G, tx, ty, hx, hy, d, kc, kd, P.seated);
     if (G.back === 'saadak') saadak(c, hx - 0.08, hy + 0.04, kc);
     head(c, G, tx + 0.025, ty - 0.115, kc, kd);
+    if (G.crown) {
+      const cx = tx + 0.025, cy = ty - 0.115 - 0.125;
+      poly(c, [cx - 0.085, cy + 0.035, cx - 0.09, cy - 0.04, cx - 0.045, cy - 0.0, cx, cy - 0.065, cx + 0.045, cy - 0.0, cx + 0.09, cy - 0.04, cx + 0.085, cy + 0.035], PAL.gold);
+    }
+    if (G.weapon === 'staff') bar(c, tx + P.hn[0] + 0.05, -0.01, tx + P.hn[0] - 0.025, ty + P.hn[1] - 0.3, 0.03, PAL.wood);
     if (G.weapon === 'bow') bow(c, G, P, tx, ty);
     if (G.shield) shield(c, G.shield, hfx + 0.02, hfy + 0.02, kc, kd);
     const w = G.weapon;
@@ -1158,9 +1199,9 @@ const UnitArt = (() => {
       return;
     }
     if (b === 'check') {
-      c.fillStyle = PAL.gold;
+      c.fillStyle = metal2(kc, kd);
       for (let i = 0; i < 9; i++) for (let j = 0; j < 4; j++) if ((i + j) % 2) c.fillRect(-0.5 + i * 0.105, -0.8 + j * 0.105 + dy, 0.105, 0.105);
-      c.fillStyle = PAL.gold; c.fillRect(-0.6, -0.4 + dy, 1.2, 0.2);
+      c.fillStyle = metal2(kc, kd); c.fillRect(-0.6, -0.4 + dy, 1.2, 0.2);
       return;
     }
     if (b === 'scale') {
@@ -1251,6 +1292,12 @@ const UnitArt = (() => {
       // накрытая шея и налобник
       poly(c, [0.15, -0.72 + dy, 0.33, -0.6 + dy, 0.48, -0.83 + dy + hd, 0.38, -0.94 + dy + hd], kc);
       oval(c, 0.53, -0.86 + dy + hd, 0.1, 0.045, 0.55, PAL.steel);
+    } else if (M.harness) {
+      // упряжь: хомут на шее, чересседельник и постромки назад к оглоблям
+      oval(c, 0.3, -0.72 + dy, 0.06, 0.13, -0.5, PAL.leatherD);
+      bar(c, -0.08, -0.75 + dy, -0.08, -0.5 + dy, 0.03, PAL.leatherD);
+      bar(c, 0.27, -0.66 + dy, -0.6, -0.62 + dy, 0.018, PAL.leatherD);
+      return;
     } else {
       // чепрак цвета державы
       poly(c, [-0.17, -0.75 + dy, 0.1, -0.75 + dy, 0.08, -0.53 + dy, -0.15, -0.53 + dy], kc);
@@ -1309,7 +1356,7 @@ const UnitArt = (() => {
     c.stroke();
     poly(c, [-0.56, -0.6, 0.48, -0.6, 0.38, -0.76, -0.64, -0.76], tone(PAL.hide, 1.12));
     bar(c, -0.64, -0.765, 0.38, -0.765, 0.03, PAL.woodD);
-    shield(c, machineShield && machineShield !== 'tower' ? machineShield : 'round', -0.04, -0.44, kc, kd);
+    shield(c, machineShield && machineShield !== 'tower' && machineShield !== 'buckler' ? machineShield : 'round', -0.04, -0.44, kc, kd);
     pennant(c, -0.5, -0.77, 0.38, kc, kd);
     wheel(c, -0.42, -0.13, 0.13, ang, PAL.wood);
     wheel(c, 0.36, -0.13, 0.13, ang + 0.5, PAL.wood);
@@ -1342,7 +1389,7 @@ const UnitArt = (() => {
     bar(c, 0.16, -0.24, 0.06, -0.66, 0.05, PAL.wood);
     bar(c, -0.04, -0.66, 0.14, -0.66, 0.05, PAL.woodD);
     disc(c, px, py, 0.04, PAL.steelD);
-    shield(c, machineShield && machineShield !== 'tower' && machineShield !== 'biground' ? machineShield : 'heater', 0.33, -0.36, kc, kd);
+    shield(c, machineShield && machineShield !== 'tower' && machineShield !== 'biground' && machineShield !== 'buckler' ? machineShield : 'heater', 0.33, -0.36, kc, kd);
     pennant(c, 0.06, -0.68, 0.32, kc, kd);
     wheel(c, -0.38, -0.12, 0.12, ang, PAL.wood);
     wheel(c, 0.36, -0.12, 0.12, ang + 0.5, PAL.wood);
@@ -1374,8 +1421,10 @@ const UnitArt = (() => {
     machine: [-0.8, -1.25, 0.92, 0.1],
     fall: [-0.72, -0.98, 0.62, 0.16],
     dead: [-0.74, -0.36, 0.62, 0.16],
+    ship: [-1.75, -2.75, 1.85, 0.32],
+    wagon: [-1.55, -1.75, 1.45, 0.12],
   };
-  const SHADOW = { foot: 0.2, mount: 0.46, machine: 0.62, fall: 0.3, dead: 0.42 };
+  const SHADOW = { foot: 0.2, mount: 0.46, machine: 0.62, fall: 0.3, dead: 0.42, ship: 0, wagon: 0.95 };
   const cache = new Map();
   let cachePx = 0;
   // два черновых холста: фигура и силуэт для контура; живут в памяти процессора, силуэт читаем
@@ -1434,7 +1483,7 @@ const UnitArt = (() => {
     cv.width = x1 - x0; cv.height = y1 - y0;
     const c = cv.getContext('2d'), w = x1 - x0, h = y1 - y0;
     c.fillStyle = 'rgba(35,22,8,0.3)';
-    c.beginPath(); c.ellipse(shx - x0, shy - y0, srx, sry, 0, 0, TAU); c.fill();
+    if (srx > 0) { c.beginPath(); c.ellipse(shx - x0, shy - y0, srx, sry, 0, 0, TAU); c.fill(); }
     c.drawImage(sil, x0, y0, w, h, 0, 0, w, h);
     c.drawImage(fig, x0, y0, w, h, 0, 0, w, h);
     return { cv, ax: ax - x0, ay: ay - y0 };
@@ -2184,9 +2233,201 @@ const UnitArt = (() => {
     ctx.drawImage(s.cv, x - s.ax * sc, y - s.ay * sc, s.cv.width * sc, s.cv.height * sc);
   }
 
+  // ---------- спрайты для полководцев, флота и переселенцев ----------
+  // Общее: x, y — точка на земле (на воде — ватерлиния под серединой корпуса) в css-пикселях контекста,
+  // size — рост фигурки воина в css-пикселях (как h у drawFigure; в строю это Renderer.armySize() * 0.7),
+  // kingdom — держава { color, dark, sigil } (у разбойников и мятежников облик оборванцев), frame — номер кадра (любое целое).
+  function devPx(size) {
+    const dev = size * lastDpr;
+    return dev > BUCKETS[BUCKETS.length - 1] ? Math.round(dev) : bucket(dev);
+  }
+  function blit(ctx, s, x, y, size) {
+    const q = size / s.px;
+    ctx.drawImage(s.cv, x - s.ax * q, y - s.ay * q, s.cv.width * q, s.cv.height * q);
+  }
+  function kcol(k) { return k && k.color ? k : { color: NEUTRAL_COLOR, dark: tone(NEUTRAL_COLOR, 0.55), sigil: 'tower' }; }
+  function cached(key, px, make) {
+    let s = cache.get(key);
+    if (s) { cache.delete(key); cache.set(key, s); return s; }
+    s = make();
+    s.px = px;
+    return remember(key, s);
+  }
+
+  // Полководец на коне: рыцарь своей культуры в плаще, с венцом и развевающимся штандартом.
+  // pose (необязательно): 'stand' | 'walk' | 'run' | 'attack'; dir: 1 — лицом вправо, -1 — влево.
+  function commander(ctx, x, y, size, kingdom, frame, pose, dir) {
+    const k = kcol(kingdom), px = devPx(size), f = (frame | 0) & 3;
+    pose = pose || 'stand'; dir = dir < 0 ? -1 : 1;
+    if (pose === 'attack') pose = 'stand';
+    const s = cached('C' + k.color + pose + f + dir + px, px, () => bake('mount', px, dir, c => rider(c, gearOf('commander', styleOf(k.color)), pose, f, k.color, k.dark)));
+    blit(ctx, s, x, y, size);
+    const bs = bannerSprite(k.color, k.dark, k.sigil, ((frame | 0) % BANNER_FRAMES + BANNER_FRAMES) % BANNER_FRAMES, dir, px, pose === 'run');
+    const sc = size / px, bx = x + dir * 0.17 * size, by = y - 0.7 * size;
+    ctx.drawImage(bs.cv, bx - bs.ax * sc, by - bs.ay * sc, bs.cv.width * sc, bs.cv.height * sc);
+  }
+
+  // Корабль сбоку. kind: 'transport' — ладья с вёслами и войском на палубе, 'war' — когг с боевыми башенками.
+  // heading — курс в радианах (0 — на восток, π/2 — на юг): по нему корабль смотрит вправо или влево.
+  // Корпус около 3 ростов в длину; качка и вёсла — по frame (цикл вёсел — 4 кадра).
+  function ship(ctx, x, y, size, kingdom, kind, heading, frame) {
+    const k = kcol(kingdom), px = devPx(size), f = ((frame | 0) % 4 + 4) % 4;
+    const dir = Math.cos(heading || 0) < -0.05 ? -1 : 1;
+    kind = kind === 'war' ? 'war' : 'transport';
+    const s = cached('S' + k.color + kind + f + dir + px, px, () => bake('ship', px, dir, c => drawShip(c, k, kind, f)));
+    const rock = Math.sin((frame | 0) * 0.45) * 0.035, bob = Math.sin((frame | 0) * 0.3) * 0.03 * size;
+    ctx.save();
+    ctx.translate(x, y + bob); ctx.rotate(rock * dir);
+    blit(ctx, s, 0, 0, size);
+    ctx.restore();
+  }
+  function drawShip(c, k, kind, f) {
+    const kc = k.color, kd = k.dark, st = styleOf(kc), war = kind === 'war';
+    const L = war ? 1.45 : 1.35, deck = war ? -0.52 : -0.36;
+    // вода за корпусом
+    c.fillStyle = 'rgba(40,80,110,0.35)';
+    c.beginPath(); c.ellipse(0, 0.04, L + 0.25, 0.14, 0, 0, TAU); c.fill();
+    // мачта, рей и парус цвета державы
+    const top = war ? -2.55 : -2.35;
+    bar(c, 0.05, deck, 0.05, top, 0.06, PAL.woodD);
+    const sy0 = top + 0.2, sy1 = war ? -1.05 : -0.95, sw = war ? 0.78 : 0.7, belly = 0.1 + (f % 2) * 0.03;
+    bar(c, 0.05 - sw - 0.06, sy0, 0.05 + sw + 0.06, sy0, 0.045, PAL.wood);
+    const sail = () => {
+      c.beginPath(); c.moveTo(0.05 - sw, sy0);
+      c.lineTo(0.05 + sw, sy0); c.quadraticCurveTo(0.05 + sw + belly, (sy0 + sy1) / 2, 0.05 + sw - 0.04, sy1);
+      c.quadraticCurveTo(0.05, sy1 + 0.08, 0.05 - sw + 0.04, sy1); c.quadraticCurveTo(0.05 - sw + belly, (sy0 + sy1) / 2, 0.05 - sw, sy0); c.closePath();
+    };
+    sail(); c.fillStyle = kc; c.fill();
+    c.save(); sail(); c.clip();
+    if (war) { c.fillStyle = PAL.light; c.fillRect(0.0, sy0, 0.1, sy1 - sy0 + 0.1); c.fillRect(0.05 - sw, (sy0 + sy1) / 2 - 0.12, sw * 2, 0.1); }
+    else { c.fillStyle = PAL.light; for (let i = -2; i <= 2; i += 2) c.fillRect(0.05 + i * sw / 3 - sw / 6, sy0, sw / 3, sy1 - sy0 + 0.1); }
+    c.fillStyle = 'rgba(30,15,5,0.15)'; c.fillRect(0.05 - sw, sy0, sw * 0.5, 2);
+    c.restore();
+    sail(); c.strokeStyle = INK; c.lineWidth = LW * 1.2; c.stroke();
+    const p = Icons.path(k.sigil);
+    if (p) {
+      const sz = 0.42, cx = 0.05, cy = (sy0 + sy1) / 2 + 0.03;
+      c.save(); c.translate(cx - sz / 2, cy - sz / 2); c.scale(sz / 24, sz / 24);
+      c.fillStyle = war ? kd : kd; c.fill(p, 'evenodd'); c.restore();
+    }
+    // ванты и вымпел на мачте
+    c.strokeStyle = PAL.rope; c.lineWidth = 0.014; c.beginPath();
+    c.moveTo(0.05, top + 0.05); c.lineTo(-L + 0.15, deck); c.moveTo(0.05, top + 0.05); c.lineTo(L - 0.1, deck); c.stroke();
+    poly(c, [0.05, top, 0.5, top + 0.07 + (f % 2) * 0.03, 0.05, top + 0.15], kc);
+    // войско на палубе: верхние половины воинов своей культуры за бортом
+    const men = war ? [[-1.05, 'crossbow'], [1.0, 'crossbow'], [-0.45, 'sword']] : [[-0.85, 'spear'], [-0.45, 'sword'], [0.4, 'spear'], [0.8, 'sword'], [-0.05, 'archer']];
+    for (const [mx, u] of men) {
+      const G = gearOf(u, st);
+      c.save(); c.translate(mx, deck + (war && Math.abs(mx) > 0.8 ? -0.3 : 0.32)); c.scale(0.8, 0.8);
+      man(c, G, footPose(G, 'stand', 0), kc, kd);
+      c.restore();
+    }
+    // корпус: ладья с высокими штевнями или когг с прямыми штевнями
+    const hull = () => {
+      c.beginPath();
+      if (war) {
+        c.moveTo(-L - 0.12, deck - 0.05); c.lineTo(L + 0.18, deck - 0.08);
+        c.lineTo(L - 0.05, -0.02); c.quadraticCurveTo(0, 0.12, -L + 0.08, -0.02); c.closePath();
+      } else {
+        c.moveTo(-L, deck); c.quadraticCurveTo(-L - 0.12, deck - 0.3, -L - 0.02, deck - 0.5);
+        c.lineTo(-L + 0.08, deck - 0.46); c.quadraticCurveTo(-L + 0.02, deck - 0.2, -L + 0.2, deck + 0.02);
+        c.lineTo(L - 0.2, deck + 0.02); c.quadraticCurveTo(L - 0.02, deck - 0.2, L + 0.08, deck - 0.52);
+        c.lineTo(L + 0.16, deck - 0.48); c.quadraticCurveTo(L + 0.16, deck - 0.2, L, deck);
+        c.quadraticCurveTo(L - 0.25, 0.02, 0, 0.05); c.quadraticCurveTo(-L + 0.25, 0.02, -L, deck); c.closePath();
+      }
+    };
+    hull(); c.fillStyle = PAL.wood; c.fill();
+    c.save(); hull(); c.clip();
+    c.strokeStyle = PAL.woodD; c.lineWidth = 0.016; c.beginPath();
+    for (let i = 1; i < 4; i++) { const yy = deck + (0.0 - deck) * i / 4; c.moveTo(-L - 0.3, yy - 0.02); c.quadraticCurveTo(0, yy + 0.06, L + 0.3, yy - 0.02); }
+    c.stroke();
+    c.fillStyle = 'rgba(30,15,5,0.25)'; c.fillRect(-L - 0.3, -0.12, L * 2 + 0.6, 0.3);
+    c.fillStyle = kc; c.fillRect(-L - 0.3, deck + 0.02, L * 2 + 0.6, 0.06);
+    c.restore();
+    hull(); c.strokeStyle = INK; c.lineWidth = LW * 1.3; c.stroke();
+    if (war) {
+      // башенки на носу и корме: дощатые с зубцами и щитами
+      for (const [x0, x1] of [[-L - 0.1, -L + 0.5], [L - 0.45, L + 0.16]]) {
+        poly(c, [x0, deck - 0.05, x1, deck - 0.06, x1, deck - 0.36, x0, deck - 0.36], PAL.woodL);
+        for (let i = 0; i < 4; i++) { const xx = x0 + 0.03 + i * (x1 - x0 - 0.06) / 3; poly(c, [xx - 0.035, deck - 0.36, xx + 0.035, deck - 0.36, xx + 0.035, deck - 0.43, xx - 0.035, deck - 0.43], PAL.woodL); }
+        shield(c, 'round', (x0 + x1) / 2, deck - 0.2, kc, kd);
+      }
+      pennant(c, L + 0.1, deck - 0.43, 0.35, kc, kd);
+    } else {
+      // щиты вдоль борта, резная голова на носу, вёсла
+      for (let i = 0; i < 5; i++) disc(c, -0.8 + i * 0.4, deck + 0.03, 0.075, i % 2 ? kc : PAL.light);
+      disc(c, L + 0.13, deck - 0.52, 0.06, PAL.woodD);
+      const ph = f * Math.PI / 2;
+      for (let i = 0; i < 5; i++) {
+        const ox = -0.9 + i * 0.45, oy = deck + 0.12, sw2 = Math.sin(ph) * 0.18, lift = Math.max(0, Math.cos(ph)) * 0.12;
+        bar(c, ox, oy, ox - 0.12 + sw2, 0.08 - lift, 0.026, PAL.woodL);
+        oval(c, ox - 0.13 + sw2, 0.07 - lift, 0.05, 0.018, 0.2, PAL.woodL);
+      }
+    }
+    // пена у борта и носовой бурун
+    c.fillStyle = 'rgba(240,248,250,0.85)';
+    for (let i = 0; i < 7; i++) {
+      const xx = -L + i * (2 * L / 6) + ((f + i) % 2) * 0.05;
+      c.beginPath(); c.ellipse(xx, 0.04, 0.12, 0.028, 0, 0, TAU); c.fill();
+    }
+    c.beginPath(); c.moveTo(L - 0.05, 0.0); c.quadraticCurveTo(L + 0.35, 0.02 - f * 0.01, L + 0.5, 0.1); c.quadraticCurveTo(L + 0.2, 0.08, L - 0.15, 0.08); c.closePath(); c.fill();
+    c.strokeStyle = 'rgba(240,248,250,0.7)'; c.lineWidth = 0.02; c.beginPath();
+    for (let i = 0; i < 3; i++) { const xx = -L - 0.15 - i * 0.18 - f * 0.04; c.moveTo(xx, 0.1 + i * 0.03); c.lineTo(xx - 0.16, 0.12 + i * 0.03); }
+    c.stroke();
+  }
+
+  // Обоз переселенцев: крытая повозка, упряжная лошадь, переселенец с посохом. dir: 1 — вправо, -1 — влево.
+  function wagon(ctx, x, y, size, kingdom, frame, dir) {
+    const k = kcol(kingdom), px = devPx(size), f = ((frame | 0) % 4 + 4) % 4;
+    dir = dir < 0 ? -1 : 1;
+    const s = cached('W' + k.color + f + dir + px, px, () => bake('wagon', px, dir, c => drawWagon(c, k, f)));
+    blit(ctx, s, x, y, size);
+  }
+  const DRAFT = { m: 0.92, col: '#8a6a48', mane: '#3a2a1a', harness: true };
+  function drawWagon(c, k, f) {
+    const kc = k.color, kd = k.dark, st = styleOf(kc);
+    const ang = f * 0.6;
+    // дальние колёса
+    wheel(c, -1.05, -0.2, 0.2, ang, tone(PAL.wood, 0.7));
+    wheel(c, -0.25, -0.2, 0.2, ang + 0.4, tone(PAL.wood, 0.7));
+    // лошадь в упряжи
+    c.save(); c.translate(0.62, 0); c.scale(0.92, 0.92);
+    horse(c, DRAFT, horsePose('walk', f), kc, kd);
+    c.restore();
+    // оглобля
+    bar(c, -0.15, -0.42, 0.62, -0.62, 0.03, PAL.woodD);
+    // кузов, поклажа сзади и полотняный верх на дугах
+    poly(c, [-1.35, -0.48, 0.0, -0.48, 0.05, -0.24, -1.3, -0.24], PAL.wood);
+    c.strokeStyle = PAL.woodD; c.lineWidth = 0.016; c.beginPath(); c.moveTo(-1.33, -0.36); c.lineTo(0.03, -0.36); c.stroke();
+    disc(c, -1.42, -0.62, 0.13, '#9a6b3c');
+    bar(c, -1.53, -0.62, -1.31, -0.62, 0.02, PAL.woodD);
+    oval(c, -1.36, -0.82, 0.12, 0.08, 0.2, PAL.linen);
+    const cover = () => {
+      c.beginPath(); c.moveTo(-1.3, -0.48); c.quadraticCurveTo(-1.42, -1.25, -0.65, -1.22); c.quadraticCurveTo(0.05, -1.25, -0.05, -0.48); c.closePath();
+    };
+    cover(); c.fillStyle = '#efe4c8'; c.fill();
+    c.save(); cover(); c.clip();
+    c.strokeStyle = 'rgba(120,96,60,0.55)'; c.lineWidth = 0.022; c.beginPath();
+    for (let i = 0; i < 4; i++) { const xx = -1.15 + i * 0.33; c.moveTo(xx, -0.48); c.quadraticCurveTo(xx + 0.02, -0.9, xx + 0.05, -1.3); }
+    c.stroke();
+    c.fillStyle = 'rgba(30,15,5,0.16)'; c.fillRect(-1.5, -1.3, 0.3, 1);
+    c.fillStyle = kc; c.fillRect(-1.5, -0.66, 1.6, 0.07);
+    c.restore();
+    cover(); c.strokeStyle = INK; c.lineWidth = LW * 1.2; c.stroke();
+    pennant(c, -0.05, -1.05, 0.5, kc, kd);
+    // ближние колёса
+    wheel(c, -1.0, -0.17, 0.22, ang + 0.2, PAL.wood);
+    wheel(c, -0.2, -0.17, 0.22, ang + 0.6, PAL.wood);
+    // переселенец с посохом идёт рядом
+    const G = gearOf('settler', st);
+    c.save(); c.translate(-0.5, 0.08); c.scale(0.92, 0.92);
+    man(c, G, footPose(G, 'walk', f), kc, kd);
+    c.restore();
+  }
+
   return {
     FORMATION_Z, clock, drawArmies, drawFallen, token, plate, portraitURL, portraitCanvas, drawFigure, sprite, bucket,
-    layoutOf, allot, tone,
+    layoutOf, allot, tone, commander, ship, wagon, setStyle, styleOf,
     get cacheSize() { return cache.size; },
   };
 })();
