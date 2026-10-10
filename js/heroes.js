@@ -130,7 +130,7 @@ const Heroes = {
     h.city = this.homeCity(g, k.id, null);
     hr.list.push(h);
     const i = hr.cands.indexOf(c);
-    if (i >= 0) hr.cands.splice(i, 1);
+    if (i >= 0) hr.cands.splice(i, 1, this.makeCand(g, hr.rng.chance(0.3) ? 2 : 1));
     hr.stats.hired++;
     return null;
   },
@@ -332,7 +332,8 @@ const Heroes = {
       h.city = c.id;
       return;
     }
-    if (c && c.owner === a.owner && dist(c.x + 0.5, c.y + 0.5, a.x, a.y) < 1.2) { h.city = c.id; return; }
+    const cd = c && c.owner === a.owner ? dist(c.x + 0.5, c.y + 0.5, a.x, a.y) : Infinity;
+    if (cd < 0.2) { h.city = c.id; return; }
     // влилась в соседнюю армию: полководец переходит, если там нет своего
     let tgt = null, bd = 1.6;
     for (const o of g.armies) {
@@ -352,6 +353,7 @@ const Heroes = {
       h.city = this.homeCity(g, h.owner, a);
       return;
     }
+    if (cd < 1.2) { h.city = c.id; return; }
     // армия рассеялась без города: полководец под угрозой
     if (btlDone) this.fate(g, h, a, 0.6, foe, false);
     else h.city = this.homeCity(g, h.owner, a);
@@ -573,8 +575,8 @@ if (typeof document !== 'undefined') {
       '.hr-sk .ico{width:14px;height:14px}.hr-xp{height:6px;margin:3px 0 4px}.hr-xp i{display:block;height:100%;background:linear-gradient(90deg,#b8862b,#e9c264);border-radius:3px}' +
       '.hr-xp{background:rgba(60,40,20,.18);border-radius:3px;overflow:hidden}' +
       '.hr-btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}.hr-btns .act{padding:6px 10px}' +
-      '.hr-army{display:flex;gap:8px;align-items:center;margin:8px 0;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:rgba(215,169,68,.14)}' +
-      '.hr-army .hr-name{font-size:16px}.hr-pick .act{display:block;width:100%;text-align:left;margin:4px 0}',
+      '.hr-army{display:flex;gap:8px;align-items:center;margin:6px 0;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:rgba(215,169,68,.14)}' +
+      '.hr-army>.act{padding:6px 9px;flex:none}.hr-one{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hr-ic{display:inline-flex;vertical-align:middle;margin-left:3px;padding:2px;border-radius:50%;background:rgba(215,169,68,.3);border:1px solid var(--line)}.hr-ic .ico{width:13px;height:13px}.hr-army .hr-name{font-size:16px}.hr-army .hr-meta{margin:0}.hr-army .hr-sk{font-size:12px;padding:0 6px 0 4px;margin:1px 3px 1px 0}.hr-pick .act{display:block;width:100%;text-align:left;margin:4px 0}',
     install() {
       if (this.done) return;
       this.done = true;
@@ -599,6 +601,9 @@ if (typeof document !== 'undefined') {
     skills(h) {
       return h.skills.map(s => `<span class="hr-sk" title="${escapeHtml(HERO_SKILLS[s].desc)}">${Icons.svg(HERO_SKILLS[s].icon)}${HERO_SKILLS[s].name}</span>`).join('');
     },
+    icons(h) {
+      return h.skills.map(s => `<span class="hr-ic" title="${escapeHtml(HERO_SKILLS[s].name + ': ' + HERO_SKILLS[s].desc)}">${Icons.svg(HERO_SKILLS[s].icon)}</span>`).join('');
+    },
     xpBar(h) {
       if (h.level >= HERO.maxLevel) return `<div class="hr-xp" title="Высший уровень"><i style="width:100%"></i></div>`;
       const lo = HERO.xpLevels[h.level - 1], hi = HERO.xpLevels[h.level];
@@ -612,8 +617,8 @@ if (typeof document !== 'undefined') {
       const mine = pl && a.owner === pl.id;
       if (h) {
         if (!mine && !g.isVisible(a.x, a.y)) return '';
-        return `<div class="hr-army">${Heroes.portrait(g, h, 40)}<div class="hr-main"><div class="hr-name">${escapeHtml(h.name)}</div>` +
-          `<div class="hr-meta">${Heroes.rank(h.level)} · ${h.level} ур.</div>${this.skills(h)}</div>` +
+        return `<div class="hr-army">${Heroes.portrait(g, h, 34)}<div class="hr-main"><div class="hr-name hr-one">${escapeHtml(h.name)}</div>` +
+          `<div class="hr-meta">${Heroes.rank(h.level)} · ${h.level} ур. ${this.icons(h)}</div></div>` +
           (mine ? `<button class="act ghost" type="button" data-act="hero-off" data-id="${h.id}">Отозвать</button>` : '') + '</div>';
       }
       if (!mine) return '';
@@ -757,7 +762,24 @@ if (typeof document !== 'undefined') {
   });
   UIExt.kingdomTabs.push({ id: 'heroes', title: 'Полководцы', html: (g, pl) => HeroesUI.tab(g, pl) });
 
-  // флажок над строем армии с полководцем (после армий, до подписей)
+  // Медальон полководца: золотая кайма, цвет державы, корона и уровень.
+  const heroMedal = (ctx, x, y, u, k, h) => {
+    const r = 8.5 * u, ring = HERO_RING[Math.min(h.level, 5) - 1];
+    ctx.fillStyle = 'rgba(30,18,8,0.35)';
+    ctx.beginPath(); ctx.ellipse(x, y + r + 1.5 * u, r * 0.9, r * 0.28, 0, 0, TAU); ctx.fill();
+    ctx.lineWidth = 1.4;
+    ctx.fillStyle = '#e6b93e'; ctx.strokeStyle = '#1a120a';
+    ctx.beginPath(); ctx.arc(x, y, r + 2 * u, 0, TAU); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = k.color;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill(); ctx.stroke();
+    if (typeof Icons !== 'undefined') Icons.draw(ctx, 'crown', x, y - 0.5 * u, 12 * u, '#f6ecd2');
+    const bx = x + r * 0.85, by = y + r * 0.85;
+    ctx.fillStyle = '#2a1b0d'; ctx.strokeStyle = ring; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.arc(bx, by, 5.4 * u, 0, TAU); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#f6e3a8'; ctx.font = 'bold ' + Math.round(8.5 * u) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(h.level), bx, by + 0.5);
+  };
+  // над строем армии с полководцем — медальон (вдали — на углу жетона), вблизи рядом с войском стоит сам полководец
   RenderExt.screen.push((ctx, r, z, tl, br) => {
     const g = r.g, hr = g && g.hr;
     if (!hr || !hr.byArmy.size || !r.drawnArmies) return;
@@ -768,31 +790,20 @@ if (typeof document !== 'undefined') {
       if (!h) continue;
       const k = g.kingdom(h.owner);
       if (!k) continue;
-      // вблизи — сам полководец на коне (если у художников он есть)
-      if (near && typeof UnitArt.commander === 'function') {
+      if (!near) { heroMedal(ctx, d.x - S * 0.5, d.y - S * 0.5, u, k, h); continue; }
+      // верх строя берём из раскладки художников; без неё — на глаз
+      let top = d.y - S * 0.55 - S * 0.9, w = d.r * 2;
+      try {
+        if (typeof UnitArt.layoutOf === 'function') {
+          const L = UnitArt.layoutOf(d.a, false), hh = S * 0.7;
+          if (L && isFinite(L.y0)) { top = d.y + S * 0.55 + L.y0 * hh; w = (L.x1 - L.x0) * hh; }
+        }
+      } catch (e) { /* раскладки нет — оставляем оценку */ }
+      if (typeof UnitArt.commander === 'function') {
         const mv = d.a.state === 'move' || d.a.state === 'retreat';
-        UnitArt.commander(ctx, d.x - d.r - S * 0.1, d.y + S * 0.55, S * 0.72, k, Math.floor(r.time * 8) + d.a.id, mv ? 'walk' : 'stand', 1);
-        continue;
+        UnitArt.commander(ctx, d.x - w / 2 - S * 0.3, d.y + S * 0.62, S * 0.72, k, Math.floor(r.time * 8) + d.a.id, mv ? 'walk' : 'stand', 1);
       }
-      const x = d.x + d.r * 0.62, y = d.y - d.r * 0.2;
-      // древко с трепещущим вымпелом цвета державы; у основания — золотой значок с уровнем
-      const H = 24 * u, sway = Math.sin(r.time * 4 + d.a.id) * 1.6 * u;
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.lineJoin = 'round';
-      ctx.strokeStyle = '#2a1b0d'; ctx.lineWidth = 2.4 * u;
-      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -H); ctx.stroke();
-      ctx.fillStyle = k.color; ctx.strokeStyle = '#1a120a'; ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(0, -H); ctx.lineTo(16 * u, -H + 2 * u + sway); ctx.lineTo(12 * u, -H + 6.5 * u + sway * 0.6);
-      ctx.lineTo(16 * u, -H + 11 * u + sway * 0.3); ctx.lineTo(0, -H + 12.5 * u); ctx.closePath();
-      ctx.fill(); ctx.stroke();
-      if (typeof Icons !== 'undefined') Icons.draw(ctx, 'star', 6.4 * u, -H + 6.2 * u, 7 * u, '#f3d58a');
-      ctx.fillStyle = HERO_RING[Math.min(h.level, 5) - 1]; ctx.strokeStyle = '#1a120a'; ctx.lineWidth = 1.3;
-      ctx.beginPath(); ctx.arc(0, 0, 6.6 * u, 0, TAU); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#2a1b0d'; ctx.font = 'bold ' + Math.round(9.5 * u) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(String(h.level), 0, 0.6);
-      ctx.restore();
+      heroMedal(ctx, d.x, top - 30 * u, u, k, h);
     }
   });
 }
