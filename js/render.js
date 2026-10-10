@@ -434,84 +434,42 @@ class Renderer {
   cityRadius(c) { return 0.5 + c.level * 0.12; }
 
   drawCities(ctx, z, tl, br) {
-    const g = this.g;
+    const g = this.g, list = [];
     for (const c of g.cities) {
       const x = c.x + 0.5, y = c.y + 0.5;
       if (x < tl.x - 3 || x > br.x + 3 || y < tl.y - 3 || y > br.y + 3) continue;
       if (!g.explored[g.cityTile(c)]) continue;
-      this.drawCity(ctx, c, x, y);
+      list.push(c);
     }
+    list.sort((p, q) => p.y - q.y || p.x - q.x);
+    WorldArt.beginCities(this);
+    for (const c of list) this.drawCity(ctx, c, c.x + 0.5, c.y + 0.5);
   }
 
+  // Город — готовый спрайт из WorldArt (дома, стены, башни, окрестности); поверх — живой стяг владельца.
   drawCity(ctx, c, x, y) {
-    const g = this.g;
-    const R = this.cityRadius(c);
+    const g = this.g, z = this.cam.z;
     const k = g.kingdom(c.owner);
     const col = k ? k.color : NEUTRAL_COLOR;
-    ctx.fillStyle = 'rgba(40,25,10,0.3)';
-    ctx.beginPath(); ctx.ellipse(x + 0.08, y + 0.12, R * 1.08, R * 0.9, 0, 0, TAU); ctx.fill();
-    ctx.fillStyle = '#cdb88b';
-    ctx.beginPath(); ctx.arc(x, y, R, 0, TAU); ctx.fill();
-    ctx.strokeStyle = 'rgba(80,55,25,0.6)'; ctx.lineWidth = 0.035;
-    ctx.stroke();
-    // дома
-    const n = Math.min(14, 3 + c.level * 2);
-    for (let h = 0; h < n; h++) {
-      const a = tileHash(c.id, 200 + h) * TAU, r = Math.sqrt(tileHash(c.id, 300 + h)) * R * 0.72;
-      const hx = x + Math.cos(a) * r, hy = y + Math.sin(a) * r * 0.85;
-      if (c.isCapital && Math.hypot(hx - x, hy - y) < 0.22) continue;
-      const s = 0.14 + tileHash(c.id, 400 + h) * 0.06;
-      ctx.fillStyle = '#e9dcc0';
-      ctx.fillRect(hx - s / 2, hy - s * 0.3, s, s * 0.7);
-      ctx.fillStyle = tileHash(c.id, 500 + h) < 0.5 ? '#9a4630' : '#7a4a2a';
-      ctx.beginPath(); ctx.moveTo(hx - s * 0.62, hy - s * 0.25); ctx.lineTo(hx, hy - s * 0.85); ctx.lineTo(hx + s * 0.62, hy - s * 0.25); ctx.closePath(); ctx.fill();
-      ctx.strokeStyle = 'rgba(50,30,15,0.7)'; ctx.lineWidth = 0.02;
-      ctx.strokeRect(hx - s / 2, hy - s * 0.3, s, s * 0.7);
-    }
-    // стены и башни
-    if (c.walls > 0) {
-      const max = WALLS[c.walls].hp;
-      const broken = c.wallHp <= 0, damaged = c.wallHp < max * 0.5;
-      const stone = c.walls >= 2;
-      ctx.strokeStyle = 'rgba(30,20,10,0.8)';
-      ctx.lineWidth = 0.09 + c.walls * 0.04;
-      if (broken) ctx.setLineDash([0.22, 0.28]); else if (damaged) ctx.setLineDash([0.6, 0.12]);
-      ctx.beginPath(); ctx.arc(x, y, R * 1.02, 0, TAU); ctx.stroke();
-      ctx.strokeStyle = stone ? (c.walls === 3 ? '#b4b0a6' : '#9b968c') : '#86603a';
-      ctx.lineWidth = 0.05 + c.walls * 0.04;
-      ctx.stroke();
-      ctx.setLineDash([]);
-      if (c.towers > 0) {
-        const nt = 2 + c.towers * 2;
-        for (let t = 0; t < nt; t++) {
-          const a = t / nt * TAU + 0.4;
-          const tx = x + Math.cos(a) * R * 1.02, ty = y + Math.sin(a) * R * 1.02;
-          ctx.fillStyle = stone ? '#a9a49a' : '#8e6a42';
-          ctx.beginPath(); ctx.arc(tx, ty, 0.07 + c.towers * 0.025, 0, TAU); ctx.fill();
-          ctx.strokeStyle = '#2d241a'; ctx.lineWidth = 0.025; ctx.stroke();
-        }
-      }
-    }
-    // замок столицы
-    if (c.isCapital) {
-      ctx.fillStyle = '#bdb6a6';
-      ctx.fillRect(x - 0.17, y - 0.3, 0.34, 0.38);
-      ctx.fillStyle = '#8f887a';
-      for (let t = 0; t < 3; t++) ctx.fillRect(x - 0.17 + t * 0.13, y - 0.38, 0.08, 0.09);
-      ctx.strokeStyle = '#2d241a'; ctx.lineWidth = 0.025; ctx.strokeRect(x - 0.17, y - 0.3, 0.34, 0.38);
-    }
-    // знамя
-    const px = x + R * 0.55, py = y - R * 0.5;
-    ctx.strokeStyle = '#3a2a18'; ctx.lineWidth = 0.035;
-    ctx.beginPath(); ctx.moveTo(px, py + 0.1); ctx.lineTo(px, py - 0.62); ctx.stroke();
-    const wave = Math.sin(this.time * 3 + c.id) * 0.03;
+    const s = WorldArt.citySprite(this, c, z * this.dpr);
+    ctx.drawImage(s.cv, x + s.x0, y + s.y0, s.w, s.h);
+    // стяг
+    const f = s.flag, sc = f.s * (z < 14 ? 1.3 : 1);
+    const px = x + f.x, py = y + f.y, L = 0.36 * sc, fw = 0.34 * sc, fh = 0.22 * sc;
+    ctx.strokeStyle = '#3a2a18'; ctx.lineWidth = Math.max(0.03, 1.4 / z);
+    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py - L - fh); ctx.stroke();
+    const wave = Math.sin(this.time * 3 + c.id) * 0.03 * sc;
+    const fy = py - L - fh;
     ctx.fillStyle = col;
     ctx.beginPath();
-    ctx.moveTo(px, py - 0.62); ctx.lineTo(px + 0.42, py - 0.6 + wave); ctx.lineTo(px + 0.36, py - 0.46); ctx.lineTo(px + 0.42, py - 0.32 + wave); ctx.lineTo(px, py - 0.34);
+    ctx.moveTo(px, fy); ctx.quadraticCurveTo(px + fw * 0.5, fy - wave, px + fw, fy + wave);
+    ctx.lineTo(px + fw * 0.82, fy + fh * 0.5); ctx.lineTo(px + fw, fy + fh + wave);
+    ctx.quadraticCurveTo(px + fw * 0.5, fy + fh - wave, px, fy + fh);
     ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = 'rgba(20,12,5,0.7)'; ctx.lineWidth = 0.02; ctx.stroke();
-    if (k) Icons.draw(ctx, k.sigil, px + 0.17, py - 0.48, 0.2, '#f6ecd2');
+    ctx.strokeStyle = 'rgba(42,27,13,0.85)'; ctx.lineWidth = Math.max(0.018, 1 / z); ctx.stroke();
+    if (k && z >= 14) Icons.draw(ctx, k.sigil, px + fw * 0.42, fy + fh * 0.5, fh * 0.85, '#f6ecd2');
     // осада: дым и огонь
+    const R = this.cityRadius(c);
     if (c.siegeBy && Math.random() < 0.3) this.spawn('smoke', x + (Math.random() - 0.5) * R, y - R * 0.3);
     if (c.siegeBy && c.wallHp <= 0 && Math.random() < 0.2) this.spawn('fire', x + (Math.random() - 0.5) * R, y + (Math.random() - 0.5) * R * 0.6);
   }
@@ -545,7 +503,7 @@ class Renderer {
       const x = c.x + 0.5, y = c.y + 0.5;
       if (x < tl.x - 3 || x > br.x + 3 || y < tl.y - 3 || y > br.y + 3) continue;
       if (!g.explored[g.cityTile(c)]) continue;
-      const s = this.toScreen(x, y + this.cityRadius(c) + 0.15);
+      const s = this.toScreen(x, y + this.cityRadius(c) * 0.8 + 0.22);
       const k = g.kingdom(c.owner);
       const name = c.name;
       ctx.font = `700 ${small ? 11 : 13}px "PT Sans Narrow", "Arial Narrow", sans-serif`;
@@ -577,7 +535,7 @@ class Renderer {
         ctx.beginPath(); ctx.arc(hp.x, hp.y, 10, -Math.PI / 2, -Math.PI / 2 + f * TAU); ctx.stroke();
       }
       if (c.walls > 0 && c.wallHp < WALLS[c.walls].hp && g.explored[g.cityTile(c)]) {
-        const wb = this.toScreen(x, y - this.cityRadius(c) - 0.3);
+        const wb = this.toScreen(x, y - this.cityRadius(c) * 0.8 - 1.05);
         const f = c.wallHp / WALLS[c.walls].hp;
         ctx.fillStyle = 'rgba(30,20,10,0.75)'; ctx.fillRect(wb.x - 20, wb.y - 3, 40, 5);
         ctx.fillStyle = f > 0 ? '#c9c2b2' : '#b33'; ctx.fillRect(wb.x - 19, wb.y - 2, 38 * f, 3);
