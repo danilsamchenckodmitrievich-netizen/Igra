@@ -821,10 +821,24 @@ class Renderer {
     if (c.siegeBy && c.wallHp <= 0 && Math.random() < 0.2) this.spawn('fire', x + (Math.random() - 0.5) * R, y + (Math.random() - 0.5) * R * 0.6);
   }
 
+  // Вблизи сами строи и схватку рисует drawArmies (art-units.js); здесь — павшие под строем и пыль.
+  // Вдали сражение отмечено скрещёнными мечами.
   drawBattles(ctx, z) {
     const g = this.g;
+    UnitArt.clock(this);
+    const near = z >= UnitArt.FORMATION_Z;
+    if (near) {
+      ctx.save();
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      UnitArt.drawFallen(this, ctx);
+      ctx.restore();
+    }
     for (const b of g.battles) {
       if (!g.isVisible(b.x, b.y)) continue;
+      if (near) {
+        if (b.kind === 'field' && Math.random() < 0.12) this.spawn('dust', b.x + (Math.random() - 0.5) * 0.8, b.y + 0.15 + (Math.random() - 0.5) * 0.2);
+        continue;
+      }
       const p = 1 + Math.sin(this.time * 8) * 0.08;
       ctx.save();
       ctx.translate(b.x, b.y - (b.kind === 'siege' ? 0.9 : 0.6));
@@ -896,7 +910,8 @@ class Renderer {
     return g.isVisible(a.x, a.y);
   }
 
-  armySize() { return clamp(this.cam.z * 0.85, 20, 34); }
+  // Размер армии на экране. Вдали это жетон-щит, вблизи — строй фигурок ростом 0.7 этого размера.
+  armySize() { return clamp(this.cam.z * 0.85, 20, 44); }
 
   drawArmies(ctx, z, tl, br) {
     const g = this.g;
@@ -904,6 +919,8 @@ class Renderer {
     const list = g.armies.filter(a => this.armyVisible(a) && a.x > tl.x - 2 && a.x < br.x + 2 && a.y > tl.y - 2 && a.y < br.y + 2);
     list.sort((p, q) => p.y - q.y);
     this.drawnArmies = [];
+    // вблизи — строй фигурок с походным шагом и схваткой
+    if (z >= UnitArt.FORMATION_Z) { UnitArt.drawArmies(this, ctx, list); return; }
     const placed = [];
     for (const a of list) {
       const k = g.kingdom(a.owner);
@@ -926,27 +943,12 @@ class Renderer {
         ctx.strokeStyle = '#ffe28a'; ctx.lineWidth = 3;
         ctx.beginPath(); ctx.ellipse(p.x, p.y, S * 0.6, S * 0.24, 0, 0, TAU); ctx.stroke();
       }
-      ctx.save();
-      ctx.translate(x - S / 2, y - S / 2);
-      ctx.scale(S / 24, S / 24);
-      const shield = Icons.path('shield');
-      ctx.fillStyle = k.color;
-      ctx.fill(shield);
-      ctx.lineWidth = 1.6;
-      ctx.strokeStyle = sel ? '#ffe28a' : '#1a120a';
-      ctx.stroke(shield);
-      ctx.restore();
-      Icons.draw(ctx, k.sigil, x, y - S * 0.03, S * 0.5, '#f6ecd2');
-      // число воинов
+      // щит с гербом и число воинов берутся из кэша
+      const t = UnitArt.token(k, S, sel, this.dpr);
+      ctx.drawImage(t.cv, x - S / 2 - t.ax / this.dpr, y - S / 2 - t.ay / this.dpr, t.w, t.h);
       const men = menCount(a.units);
-      const txt = men >= 1000 ? (men / 1000).toFixed(1) + 'к' : String(men);
-      ctx.font = '700 11px "PT Sans Narrow", "Arial Narrow", sans-serif';
-      const tw = ctx.measureText(txt).width + 8;
-      ctx.fillStyle = 'rgba(25,15,8,0.85)';
-      this.roundRect(ctx, x - tw / 2, y + S * 0.42, tw, 14, 7); ctx.fill();
-      ctx.fillStyle = a.state === 'retreat' ? '#ffb0a0' : '#fff3d6';
-      ctx.textAlign = 'center';
-      ctx.fillText(txt, x, y + S * 0.42 + 11);
+      const pl = UnitArt.plate(men >= 1000 ? (men / 1000).toFixed(1) + 'к' : String(men), a.state === 'retreat', this.dpr);
+      ctx.drawImage(pl.cv, x - pl.w / 2, y + S * 0.42, pl.w, pl.h);
       if (a.state === 'siege') Icons.draw(ctx, 'target', x + S * 0.5, y - S * 0.45, 12, '#ffcf7a');
       if (a.state === 'retreat') Icons.draw(ctx, 'flag', x + S * 0.5, y - S * 0.45, 12, '#ffffff');
     }
@@ -964,30 +966,85 @@ class Renderer {
     ctx.beginPath(); ctx.ellipse(p.x, p.y, 16 - k * 8, 7 - k * 3, 0, 0, TAU); ctx.stroke();
   }
 
-  // частицы в мировых координатах
-  spawn(type, x, y) {
-    if (this.particles.length > 400) return;
-    const p = { type, x, y, t: 0, vx: (Math.random() - 0.5) * 0.4, vy: -0.3 - Math.random() * 0.4 };
+  // Частицы в мировых координатах. o — дополнительно: для снарядов (arrow, bolt, stone) цель tx, ty,
+  // время полёта dur и высота дуги arc в клетках; для павших (fallen) — род войск и цвета державы.
+  spawn(type, x, y, o) {
+    if (this.particles.length > (type === 'fallen' ? 760 : 700)) return;
+    const p = { type, x, y, t: 0, vx: (Math.random() - 0.5) * 0.4, vy: -0.3 - Math.random() * 0.4, dur: 1 };
     if (type === 'dust') { p.dur = 0.9; p.vy = -0.1 - Math.random() * 0.2; }
     else if (type === 'smoke') p.dur = 2.2;
     else if (type === 'fire') { p.dur = 0.7; p.vy = -0.6; }
     else if (type === 'debris') { p.dur = 0.9; const a = Math.random() * TAU, v = 0.8 + Math.random() * 1.5; p.vx = Math.cos(a) * v; p.vy = Math.sin(a) * v - 0.6; }
+    else if (type === 'spark') { p.dur = 0.2 + Math.random() * 0.12; const a = Math.random() * TAU, v = 1.4 + Math.random() * 1.6; p.vx = Math.cos(a) * v; p.vy = Math.sin(a) * v * 0.7 - 0.5; }
+    else if (type === 'arrow' || type === 'bolt' || type === 'stone') {
+      p.vx = p.vy = 0; p.x0 = x; p.y0 = y;
+      p.tx = o ? o.tx : x; p.ty = o ? o.ty : y; p.dur = o && o.dur ? o.dur : 0.6; p.arc = o && o.arc ? o.arc : 0.3;
+    } else if (type === 'fallen') {
+      p.vx = p.vy = 0; p.dur = 4.5;
+      p.uid = o.uid; p.kc = o.kc; p.kd = o.kd; p.dir = o.dir || 1;
+    }
     this.particles.push(p);
   }
   drawParticles(ctx, dt) {
-    const z = this.cam.z;
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const p = this.particles[i];
+    const z = this.cam.z, P = this.particles;
+    const shafts = [], fletch = [];
+    const al = Math.min(10, Math.max(4, z * 0.2));
+    for (let i = P.length - 1; i >= 0; i--) {
+      const p = P[i];
       p.t += dt;
-      if (p.t >= p.dur) { this.particles.splice(i, 1); continue; }
+      if (p.t >= p.dur) {
+        // камень падает: обломки и пыль
+        if (p.type === 'stone') {
+          for (let k = 0; k < 6; k++) this.spawn('debris', p.tx, p.ty);
+          this.spawn('smoke', p.tx, p.ty - 0.1); this.spawn('dust', p.tx, p.ty);
+        }
+        P.splice(i, 1); continue;
+      }
+      if (p.type === 'fallen') continue;   // лежат под строем, их рисует drawBattles
+      const k = p.t / p.dur;
+      if (p.type === 'arrow' || p.type === 'bolt' || p.type === 'stone') {
+        const gx = p.x0 + (p.tx - p.x0) * k, gy = p.y0 + (p.ty - p.y0) * k;
+        const s = this.toScreen(gx, gy - p.arc * 4 * k * (1 - k));
+        if (p.type === 'stone') {
+          const r = Math.min(4.5, Math.max(2, z * 0.07)), g = this.toScreen(gx, gy);
+          ctx.globalAlpha = 0.25; ctx.fillStyle = '#1e140a';
+          ctx.beginPath(); ctx.ellipse(g.x, g.y, r, r * 0.45, 0, 0, TAU); ctx.fill();
+          ctx.globalAlpha = 1; ctx.fillStyle = '#8f897e'; ctx.strokeStyle = '#2a1b0d'; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, TAU); ctx.fill(); ctx.stroke();
+        } else {
+          // направление полёта по касательной к дуге
+          const dx = (p.tx - p.x0), dy = (p.ty - p.y0) - p.arc * 4 * (1 - 2 * k);
+          const L = Math.hypot(dx, dy) || 1, len = p.type === 'bolt' ? al * 0.7 : al;
+          const ux = dx / L * len / 2, uy = dy / L * len / 2;
+          shafts.push(s.x - ux, s.y - uy, s.x + ux, s.y + uy);
+          fletch.push(s.x - ux, s.y - uy, s.x - ux * 0.45, s.y - uy * 0.45);
+        }
+        continue;
+      }
       p.x += p.vx * dt; p.y += p.vy * dt;
       if (p.type === 'debris') p.vy += 2.5 * dt;
       const s = this.toScreen(p.x, p.y);
-      const k = p.t / p.dur;
-      if (p.type === 'dust') { ctx.fillStyle = `rgba(150,120,80,${0.5 * (1 - k)})`; ctx.beginPath(); ctx.arc(s.x, s.y, (0.12 + k * 0.25) * z, 0, TAU); ctx.fill(); }
-      else if (p.type === 'smoke') { ctx.fillStyle = `rgba(70,65,60,${0.45 * (1 - k)})`; ctx.beginPath(); ctx.arc(s.x, s.y, (0.15 + k * 0.4) * z, 0, TAU); ctx.fill(); }
-      else if (p.type === 'fire') { ctx.fillStyle = `rgba(255,${150 + 80 * (1 - k) | 0},40,${0.9 * (1 - k)})`; ctx.beginPath(); ctx.arc(s.x, s.y, (0.08 + (1 - k) * 0.1) * z, 0, TAU); ctx.fill(); }
-      else if (p.type === 'debris') { ctx.fillStyle = `rgba(90,75,60,${1 - k})`; ctx.fillRect(s.x - 2, s.y - 2, 4, 4); }
+      if (p.type === 'dust') { ctx.globalAlpha = 0.5 * (1 - k); ctx.fillStyle = '#967850'; ctx.beginPath(); ctx.arc(s.x, s.y, (0.12 + k * 0.25) * Math.min(z, 36), 0, TAU); ctx.fill(); }
+      else if (p.type === 'smoke') { ctx.globalAlpha = 0.45 * (1 - k); ctx.fillStyle = '#46413c'; ctx.beginPath(); ctx.arc(s.x, s.y, (0.15 + k * 0.4) * z, 0, TAU); ctx.fill(); }
+      else if (p.type === 'fire') { ctx.globalAlpha = 0.9 * (1 - k); ctx.fillStyle = k < 0.5 ? '#ffe04a' : '#ff9a28'; ctx.beginPath(); ctx.arc(s.x, s.y, (0.08 + (1 - k) * 0.1) * z, 0, TAU); ctx.fill(); }
+      else if (p.type === 'debris') { ctx.globalAlpha = 1 - k; ctx.fillStyle = '#5a4b3c'; ctx.fillRect(s.x - 2, s.y - 2, 4, 4); }
+      else if (p.type === 'spark') {
+        ctx.globalAlpha = 1 - k; ctx.strokeStyle = k < 0.4 ? '#fffbe6' : '#ffd25a'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(s.x - p.vx * z * 0.035, s.y - p.vy * z * 0.035); ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+    // стрелы и болты одним росчерком: древко и светлое оперение
+    if (shafts.length) {
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#2f2010'; ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      for (let i = 0; i < shafts.length; i += 4) { ctx.moveTo(shafts[i], shafts[i + 1]); ctx.lineTo(shafts[i + 2], shafts[i + 3]); }
+      ctx.stroke();
+      ctx.strokeStyle = '#f3e7c6'; ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      for (let i = 0; i < fletch.length; i += 4) { ctx.moveTo(fletch[i], fletch[i + 1]); ctx.lineTo(fletch[i + 2], fletch[i + 3]); }
+      ctx.stroke();
     }
   }
   drawSnowfall(ctx, dt) {
