@@ -565,6 +565,9 @@ class Game {
   order(a, target) {
     if (!a || a.state === 'battle') return 'Армия в бою';
     if (a.state === 'retreat') return 'Армия отступает';
+    // на державу, с которой мир или союз, не нападают: сперва нужно объявить войну (дипломатия)
+    const foe = target.kind === 'city' ? (this.city(target.id) || {}).owner : target.kind === 'army' && this.army(target.id) ? this.army(target.id).owner : undefined;
+    if (foe !== undefined && foe !== a.owner && !this.isHostile(a.owner, foe)) { this.emit('peaceBlock', { army: a, owner: foe, target }); return 'С этой державой мир. Объявить войну?'; }
     if (a.state === 'siege') this.endSiege(a, false);
     let tx, ty;
     if (target.kind === 'city') { const c = this.city(target.id); tx = c.x + 0.5; ty = c.y + 0.5; }
@@ -594,8 +597,9 @@ class Game {
         if (!t) { a.dest = null; a.path = null; a.state = 'idle'; continue; }
         if (this.time - a.lastRepath > 1.5) {
           a.lastRepath = this.time;
-          if (t.owner === a.owner) { /* к своим — просто идём */ }
-          this.setPath(a, t.x, t.y);
+          // путь пересчитываем, только если цель ушла от его конца
+          const end = a.path && a.path[a.path.length - 1];
+          if (!end || Math.abs(end.x - t.x) + Math.abs(end.y - t.y) > 1) this.setPath(a, t.x, t.y);
         }
         if (t.owner === a.owner && dist(a.x, a.y, t.x, t.y) < 0.8 && t.state !== 'battle') { this.mergeInto(t, a); continue; }
       }
@@ -612,7 +616,7 @@ class Game {
           // осада начинается у стен
           if (a.dest && a.dest.kind === 'city' && a.state !== 'retreat') {
             const c = this.city(a.dest.id);
-            if (c && c.owner !== a.owner && dist(a.x, a.y, c.x + 0.5, c.y + 0.5) <= COMBAT.siegeReach) { this.arriveCity(a, c); break; }
+            if (c && c.owner !== a.owner && this.isHostile(a.owner, c.owner) && dist(a.x, a.y, c.x + 0.5, c.y + 0.5) <= COMBAT.siegeReach) { this.arriveCity(a, c); break; }
           }
         }
         if (a.path && a.pathI >= a.path.length) {
@@ -647,6 +651,8 @@ class Game {
     }
     // отступавшие к уже потерянному городу ищут другое убежище, а не идут на штурм
     if (a.state === 'retreat') { this.retreat(a); return; }
+    // с хозяином города заключили мир, пока армия шла, — штурма не будет
+    if (!this.isHostile(a.owner, c.owner)) { a.state = 'idle'; a.dest = null; return; }
     // своя армия уже осаждает — присоединяемся
     const ally = this.armies.find(o => o !== a && o.owner === a.owner && o.state === 'siege' && o.siegeCity === c.id);
     if (ally) { this.mergeInto(ally, a); return; }
@@ -677,6 +683,8 @@ class Game {
   startSiege(a, c) {
     if (c.siegeBy && c.siegeBy !== a.id) {
       const other = this.army(c.siegeBy);
+      // город уже осаждает союзник или держава, с которой мир, — ждём рядом
+      if (other && other.owner !== a.owner && !this.isHostile(a.owner, other.owner)) { a.state = 'idle'; a.dest = null; return; }
       if (other && other.owner !== a.owner && other.state !== 'battle') { this.startField(a, other); return; }
       if (other && other.owner === a.owner) { this.mergeInto(other, a); return; }
     }
@@ -824,7 +832,7 @@ class Game {
       if (win.resumeSiege) {
         const c = this.city(win.resumeSiege);
         win.resumeSiege = null;
-        if (c && c.owner !== win.owner) { this.startSiege(win, c); }
+        if (c && c.owner !== win.owner && this.isHostile(win.owner, c.owner)) { this.startSiege(win, c); }
       } else if (win.dest && win.dest.kind !== 'army') {
         const d = win.dest;
         const err = this.order(win, d);
@@ -1031,9 +1039,11 @@ class Game {
     if (!pl.alive) { this.winner = -1; this.emit('gameover', { win: false, reason: 'fallen' }); return; }
     const rivals = this.kingdoms.filter(k => !k.isPlayer && !k.bandit && k.alive);
     const total = this.cities.length;
-    if (!rivals.length || this.citiesOf(pl.id).length >= Math.ceil(total * WIN_SHARE)) {
+    // союзная победа (дипломатия): все уцелевшие соперники — союзники, и вместе вы держите большую часть мира
+    const allied = Mods.mod('alliedWin', this, false, pl, rivals);
+    if (!rivals.length || allied || this.citiesOf(pl.id).length >= Math.ceil(total * WIN_SHARE)) {
       this.winner = pl.id;
-      this.emit('gameover', { win: true, reason: rivals.length ? 'share' : 'conquest' });
+      this.emit('gameover', { win: true, reason: !rivals.length ? 'conquest' : allied ? 'alliance' : 'share' });
       return;
     }
     for (const k of rivals) {

@@ -19,6 +19,7 @@ const AI = {
     const ctx = { cities, inc, threats: this.threats(g, k, cities) };
     this.economy(g, k, ctx);
     this.recruit(g, k, ctx);
+    Mods.call('aiThink', g, k, ctx);   // дипломатия и прочие модули
     this.military(g, k, ctx);
   },
 
@@ -34,7 +35,7 @@ const AI = {
   threats(g, k, cities) {
     const out = [];
     for (const a of g.armies) {
-      if (a.owner === k.id) continue;
+      if (a.owner === k.id || !g.isHostile(k.id, a.owner)) continue;
       let near = null, nd = 12;
       for (const c of cities) {
         const d = dist(a.x, a.y, c.x + 0.5, c.y + 0.5);
@@ -225,7 +226,7 @@ const AI = {
     for (const c of g.cities) {
       if (c.owner === k.id) continue;
       const isKingdom = c.owner !== -1;
-      if (isKingdom && g.time < GRACE_TIME) continue;
+      if (isKingdom && !g.isHostile(k.id, c.owner)) continue;   // нападаем только на тех, с кем война
       const ok = g.kingdom(c.owner);
       if (isKingdom && (!ok || !ok.alive)) continue;
       const def = this.cityDefense(g, c);
@@ -236,6 +237,7 @@ const AI = {
       let score = d * 1.5 + def / 40;
       if (isKingdom && ok.isPlayer) score *= 1.15 / g.diff.aggression;
       if (c.isCapital) score *= 0.85;
+      score = Mods.mod('aiTarget', g, score, k, c);
       if (score < bs) { bs = score; best = c; }
     }
     if (best) {
