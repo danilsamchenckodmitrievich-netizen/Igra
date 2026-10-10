@@ -44,13 +44,13 @@ class Game {
     const W = this.world.W, H = this.world.H;
     this.explored = new Uint8Array(W * H);
     this.visible = new Uint8Array(W * H);
-    this.visT = 0; this.econT = 0; this.battleT = 0; this.aiT = 0; this.saveT = 0;
+    this.visT = 0; this.econT = 0; this.battleT = 0; this.aiT = 0; this.saveT = 0; this.inflT = 0;
     this.territoryVersion = 0;
     this.ownershipVersion = 0;
     this.fx = [];
     if (save) this.restore(save);
     else this.setup();
-    this.world.computeTerritory(this.cities);
+    this.refreshTerritory(true);
     this.updateVisibility();
   }
 
@@ -228,6 +228,51 @@ class Game {
     const out = [];
     for (const r in cost) if ((k.res[r] || 0) < cost[r]) out.push(RES_BY_ID[r].gen);
     return out;
+  }
+
+  // ---------- влияние и земли ----------
+  // Сила влияния города — на сколько клеток он держит землю. Вклады в клетках (enemies ≤ 0),
+  // reach = их сумма в пределах INFLUENCE.min…max. Вольные города: размер и гарнизон, армий у них нет.
+  cityInfluence(c) {
+    const I = INFLUENCE;
+    const out = { reach: 0, base: I.base[c.level] || I.base[1], pop: 0, garrison: 0, armies: 0, enemies: 0 };
+    out.pop = I.pop * Math.sqrt(Math.max(0, c.pop) / 400);
+    out.garrison = Math.min(I.garrisonMax, I.garrison * Math.sqrt(menCount(c.garrison) / 10));
+    if (c.owner !== -1) {
+      const cx = c.x + 0.5, cy = c.y + 0.5;
+      let own = 0, foe = 0;
+      for (const a of this.armies) {
+        const dx = a.x - cx, dy = a.y - cy;
+        if (Math.abs(dx) > I.armyR || Math.abs(dy) > I.armyR) continue;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        const s = Math.sqrt(menCount(a.units) / 10);
+        if (a.owner === c.owner) { if (d < I.armyR) own += I.army * s * (1 - d / I.armyR); }
+        else if (d < I.enemyR) foe += I.enemy * s * (1 - d / I.enemyR);
+      }
+      if (c.siegeBy) foe += I.siege;
+      out.armies = Math.min(I.armyMax, own);
+      out.enemies = -Math.min(I.enemyMax, foe);
+    }
+    out.reach = clamp(out.base + out.pop + out.garrison + out.armies + out.enemies, I.min, I.max);
+    return out;
+  }
+  // Перекроить земли, если чья-то сила заметно изменилась или город сменил хозяина (force — сразу).
+  // Сами земли выводятся из состояния и не сохраняются.
+  refreshTerritory(force) {
+    const reach = new Map();
+    let changed = force || !this.inflUsed;
+    for (const c of this.cities) {
+      const r = this.cityInfluence(c).reach;
+      reach.set(c.id, r);
+      if (changed) continue;
+      const u = this.inflUsed.get(c.id);
+      if (!u || u.owner !== c.owner || Math.abs(u.reach - r) >= INFLUENCE.threshold) changed = true;
+    }
+    if (!changed) return false;
+    this.world.computeTerritory(this.cities, reach);
+    this.inflUsed = new Map(this.cities.map(c => [c.id, { reach: reach.get(c.id), owner: c.owner }]));
+    this.territoryVersion++;
+    return true;
   }
 
   // Множитель выхода здания от окрестностей города.
@@ -928,6 +973,7 @@ class Game {
     const wasCapital = c.isCapital;
     c.isCapital = false;
     this.removeArmy(a);
+    this.refreshTerritory(true);
     // добыча
     let loot = 120 + c.level * 60;
     if (old && !old.bandit) loot += Math.min(300, Math.floor(old.res.gold * 0.15));
@@ -1006,6 +1052,8 @@ class Game {
     while (this.econT >= 1) { this.econT -= 1; this.tickEconomy(1); }
     this.visT += dt;
     if (this.visT >= 0.5) { this.visT = 0; this.updateVisibility(); }
+    this.inflT += dt;
+    if (this.inflT >= INFLUENCE.recheck) { this.inflT = 0; this.refreshTerritory(false); }
     this.updateBandits(dt);
     this.updateEvents(dt);
     if (typeof AI !== 'undefined') {
@@ -1110,8 +1158,7 @@ class Game {
     else if (b.kind === 'towers') c.towers = b.to;
     else if (b.kind === 'level') {
       c.level = b.to;
-      this.world.computeTerritory(this.cities);
-      this.territoryVersion++;
+      this.refreshTerritory(true);
     }
     if (k.isPlayer) this.notify(c.name + ': ' + b.name.toLowerCase() + (b.kind === 'level' ? '' : ' (' + b.to + ' ур.)') + ' — готово', 'good', c);
     this.emit('built', { city: c, build: b });

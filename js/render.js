@@ -382,28 +382,126 @@ class Renderer {
     return c ? c.owner : null;
   }
 
+  // Слой земель (1 пиксель = 1 клетка, при увеличении сглаживается): цвет державы, насыщенный у города
+  // и гаснущий к краю по силе влияния world.infl; у самой границы — полоса погуще, чтобы край читался.
+  // Вольные земли бледнее. Плюс изолинии владений каждой державы для контуров (drawBorders).
   rebuildTerritory() {
-    const g = this.g, w = g.world, W = w.W, H = w.H;
+    const g = this.g, w = g.world, W = w.W, H = w.H, n = W * H;
+    const NONE = -99;
     const cv = this.layers.territory, c = cv.getContext('2d');
-    const img = c.createImageData(W, H);
+    const img = c.createImageData(W, H), px = img.data;
+    if (!this.terrOwn || this.terrOwn.length !== n) this.terrOwn = new Int32Array(n);
+    const own = this.terrOwn, infl = w.infl;
+    const kOf = new Map(g.cities.map(q => [q.id, q.owner]));
+    for (let i = 0; i < n; i++) {
+      const cid = w.cityOf[i];
+      const k = cid < 0 ? undefined : kOf.get(cid);
+      own[i] = k === undefined ? NONE : k;
+    }
     const colors = new Map(g.kingdoms.map(k => [k.id, parseInt(k.color.slice(1), 16)]));
-    const own = new Int32Array(W * H);
-    for (let i = 0; i < W * H; i++) {
-      const k = this.kingdomOfTile(i);
-      own[i] = k === null ? -99 : k;
-      if (k === null) continue;
-      const col = k === -1 ? 0x8a7f6a : colors.get(k);
-      img.data[i * 4] = (col >> 16) & 255; img.data[i * 4 + 1] = (col >> 8) & 255; img.data[i * 4 + 2] = col & 255;
-      img.data[i * 4 + 3] = k === -1 ? 30 : 62;
+    colors.set(-1, parseInt(NEUTRAL_COLOR.slice(1), 16));
+    for (let i = 0; i < n; i++) {
+      const k = own[i];
+      if (k === NONE) continue;
+      const x = i % W, y = (i - x) / W;
+      const rim = (x > 0 && own[i - 1] !== k) || (x < W - 1 && own[i + 1] !== k) || (y > 0 && own[i - W] !== k) || (y < H - 1 && own[i + W] !== k);
+      const f = infl ? infl[i] : 1;
+      let a;
+      if (k === -1) a = Math.max(0.04 + 0.16 * f * f, rim ? 0.09 : 0);
+      else a = Math.max(0.05 + 0.5 * Math.pow(f, 1.6), rim ? 0.16 : 0);
+      const col = colors.get(k);
+      px[i * 4] = (col >> 16) & 255; px[i * 4 + 1] = (col >> 8) & 255; px[i * 4 + 2] = col & 255;
+      px[i * 4 + 3] = Math.round(a * 255);
     }
     c.putImageData(img, 0, 0);
-    // границы: изолиния владений каждой державы
-    const paths = new Map();
-    const ids = new Set();
-    for (let i = 0; i < W * H; i++) if (own[i] !== -99) ids.add(own[i]);
-    for (const k of ids) paths.set(k, this.contour((x, y) => x >= 0 && y >= 0 && x < W && y < H && own[y * W + x] === k, 0, 0, W, H));
-    this.borders = paths;
+    this.borders = this.territoryPaths(own, W, H, NONE);
     this.mmBase = null;
+  }
+
+  // Изолинии владений всех держав за один проход марширующих квадратов (как contour, но сразу для всех).
+  // Отрезки в удвоенных координатах сшиваются в замкнутые цепочки и сглаживаются smoothPath.
+  territoryPaths(own, W, H, NONE) {
+    const segs = new Map();
+    const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? NONE : own[y * W + x]);
+    const ks = [0, 0, 0, 0];
+    for (let y = -1; y < H; y++) {
+      for (let x = -1; x < W; x++) {
+        const a = at(x, y), b = at(x + 1, y), c = at(x + 1, y + 1), d = at(x, y + 1);
+        if (a === b && b === c && c === d) continue;
+        ks[0] = a; ks[1] = b; ks[2] = c; ks[3] = d;
+        const X = 2 * x + 1, Y = 2 * y + 1;
+        for (let m = 0; m < 4; m++) {
+          const k = ks[m];
+          if (k === NONE || ks.indexOf(k) !== m) continue;
+          const code = (a === k ? 8 : 0) + (b === k ? 4 : 0) + (c === k ? 2 : 0) + (d === k ? 1 : 0);
+          let s = segs.get(k);
+          if (!s) segs.set(k, (s = []));
+          // точки на серединах рёбер: верх (X+1,Y), право (X+2,Y+1), низ (X+1,Y+2), лево (X,Y+1)
+          switch (code) {
+            case 1: case 14: s.push(X, Y + 1, X + 1, Y + 2); break;
+            case 2: case 13: s.push(X + 1, Y + 2, X + 2, Y + 1); break;
+            case 3: case 12: s.push(X, Y + 1, X + 2, Y + 1); break;
+            case 4: case 11: s.push(X + 1, Y, X + 2, Y + 1); break;
+            case 5: s.push(X, Y + 1, X + 1, Y, X + 1, Y + 2, X + 2, Y + 1); break;
+            case 6: case 9: s.push(X + 1, Y, X + 1, Y + 2); break;
+            case 7: case 8: s.push(X, Y + 1, X + 1, Y); break;
+            case 10: s.push(X + 1, Y, X + 2, Y + 1, X, Y + 1, X + 1, Y + 2); break;
+          }
+        }
+      }
+    }
+    const out = new Map();
+    this.borderBox = new Map();
+    const key = (px, py) => (py + 4) * 65536 + px + 4;
+    for (const [k, s] of segs) {
+      const ns = s.length / 4;
+      // рамка изолинии (в клетках) — чтобы не рисовать границы за краем экрана
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let q = 0; q < s.length; q += 2) {
+        if (s[q] < x0) x0 = s[q]; if (s[q] > x1) x1 = s[q];
+        if (s[q + 1] < y0) y0 = s[q + 1]; if (s[q + 1] > y1) y1 = s[q + 1];
+      }
+      this.borderBox.set(k, [x0 / 2, y0 / 2, x1 / 2, y1 / 2]);
+      // у каждой точки не больше двух отрезков: ends[2t], ends[2t+1] — концы (номер отрезка × 2 + конец)
+      const slot = new Map();
+      const ends = new Int32Array(ns * 4).fill(-1);
+      for (let e = 0; e < ns * 2; e++) {
+        const kk = key(s[e * 2], s[e * 2 + 1]);
+        let t = slot.get(kk);
+        if (t === undefined) { t = slot.size; slot.set(kk, t); }
+        if (ends[t * 2] < 0) ends[t * 2] = e; else ends[t * 2 + 1] = e;
+      }
+      const used = new Uint8Array(ns);
+      const p = new Path2D();
+      const other = e => {
+        const t = slot.get(key(s[e * 2], s[e * 2 + 1]));
+        const f = ends[t * 2] === e ? ends[t * 2 + 1] : ends[t * 2];
+        return f >= 0 && !used[f >> 1] ? f : -1;
+      };
+      for (let s0 = 0; s0 < ns; s0++) {
+        if (used[s0]) continue;
+        used[s0] = 1;
+        const pts = [[s[s0 * 4], s[s0 * 4 + 1]], [s[s0 * 4 + 2], s[s0 * 4 + 3]]];
+        let e = s0 * 2 + 1, f;
+        while ((f = other(e)) >= 0) {
+          used[f >> 1] = 1;
+          e = f ^ 1;
+          pts.push([s[e * 2], s[e * 2 + 1]]);
+        }
+        const closed = pts.length > 2 && pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1];
+        if (!closed) {
+          e = s0 * 2;
+          while ((f = other(e)) >= 0) {
+            used[f >> 1] = 1;
+            e = f ^ 1;
+            pts.unshift([s[e * 2], s[e * 2 + 1]]);
+          }
+        }
+        this.smoothPath(p, pts, closed);
+      }
+      out.set(k, p);
+    }
+    return out;
   }
 
   rebuildFog() {
@@ -501,27 +599,40 @@ class Renderer {
     if (season === 3) this.drawSnowfall(ctx, dt);
   }
 
+  // Границы: у каждой державы цветная кайма с внутренней стороны (обрезана по её землям), поверх —
+  // чернильная линия. На стыке двух держав видны обе каймы, разделённые чернилом. Вольные — пунктир.
   drawBorders(ctx, z) {
     if (!this.borders) return;
-    ctx.lineCap = 'round';
+    const tl = this.toWorld(0, 0), br = this.toWorld(this.w, this.h);
+    const shown = [];
+    let free = null;
     for (const [k, p] of this.borders) {
-      if (k === -1) {
-        ctx.setLineDash([0.25, 0.2]);
-        ctx.strokeStyle = 'rgba(80,70,55,0.55)';
-        ctx.lineWidth = 1.2 / z;
-        ctx.stroke(p);
-        ctx.setLineDash([]);
-        continue;
-      }
+      const b = this.borderBox.get(k);
+      if (b[2] < tl.x || b[0] > br.x || b[3] < tl.y || b[1] > br.y) continue;
+      if (k === -1) { free = p; continue; }
       const kg = this.g.kingdom(k);
-      if (!kg) continue;
-      ctx.strokeStyle = 'rgba(30,20,10,0.55)';
-      ctx.lineWidth = Math.max(3.2 / z, 0.07);
-      ctx.stroke(p);
-      ctx.strokeStyle = kg.color;
-      ctx.lineWidth = Math.max(1.8 / z, 0.04);
-      ctx.stroke(p);
+      if (kg) shown.push([kg, p]);
     }
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    if (free) {
+      ctx.setLineDash([0.25, 0.2]);
+      ctx.strokeStyle = 'rgba(80,70,55,0.5)';
+      ctx.lineWidth = 1.2 / z;
+      ctx.stroke(free);
+      ctx.setLineDash([]);
+    }
+    const band = Math.max(5 / z, 0.1);
+    for (const [kg, p] of shown) {
+      ctx.save();
+      ctx.clip(p, 'evenodd');
+      ctx.strokeStyle = hexA(kg.color, 0.8);
+      ctx.lineWidth = band;
+      ctx.stroke(p);
+      ctx.restore();
+    }
+    ctx.strokeStyle = 'rgba(42,27,13,0.78)';
+    ctx.lineWidth = Math.max(1.5 / z, 0.035);
+    for (const [, p] of shown) ctx.stroke(p);
   }
 
   drawPaths(ctx, z) {
