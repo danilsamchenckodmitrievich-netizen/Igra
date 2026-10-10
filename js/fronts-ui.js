@@ -84,11 +84,6 @@ const FrontsUI = {
       `<span title="Скорость">${Icons.svg('flag')}${g.armySpeed(a).toFixed(2)} кл/с</span></div>`;
     h += `<div class="dstate">${this.gdot(grp)}<b>${this.status(ui, a)}</b>` +
       (grp ? ` · <span>${this.esc(grp.name)}</span>` : '') + (fr ? ` · <span class="fr">${this.esc(fr.name)}${fr.mode === 'attack' ? ' (наступление)' : ''}</span>` : '') + '</div>';
-    const org = a.org === undefined ? 100 : a.org;
-    h += '<div class="dbars">' + this.bar('Организованность', org, 'org ' + this.orgCls(org)) +
-      this.bar('Опыт', a.xp || 0, 'xp', Math.round((a.xp || 0) / DIV.xpMax * DIV.xpAtk * 100) > 0 ? '+' + Math.round((a.xp || 0) / DIV.xpMax * DIV.xpAtk * 100) + '% к урону' : 'новобранцы') +
-      this.bar('Окапывание', (a.entrench || 0) * 100, 'dig', (a.entrench || 0) > 0.02 ? '+' + Math.round(a.entrench * DIV.digDef * 100) + '% к защите' : 'нет') + '</div>';
-    h += seen ? ui.unitsHtml(a.units) : '<span class="tip">Состав неизвестен</span>';
     if (mine) {
       h += `<div class="btnrow"><button class="act" type="button" data-act="stop">Стоп</button>` +
         `<button class="act ghost" type="button" data-act="hold">${fr ? 'Оборона фронта' : 'Окопаться'}</button>` +
@@ -97,6 +92,13 @@ const FrontsUI = {
         `<button class="act ghost${this.pick === 'front' ? ' on' : ''}" type="button" data-act="dpick" data-v="front">${fr ? 'Фронт…' : 'На фронт…'}</button>` +
         `<button class="act ghost" type="button" data-act="split">Разделить</button><button class="act ghost" type="button" data-act="merge">Слить</button></div>`;
       if (this.pick) h += this.pickHtml(ui, [a]);
+    }
+    const org = a.org === undefined ? 100 : a.org;
+    h += '<div class="dbars">' + this.bar('Организованность', org, 'org ' + this.orgCls(org)) +
+      this.bar('Опыт', a.xp || 0, 'xp', Math.round((a.xp || 0) / DIV.xpMax * DIV.xpAtk * 100) > 0 ? '+' + Math.round((a.xp || 0) / DIV.xpMax * DIV.xpAtk * 100) + '% к урону' : 'новобранцы') +
+      this.bar('Окапывание', (a.entrench || 0) * 100, 'dig', (a.entrench || 0) > 0.02 ? '+' + Math.round(a.entrench * DIV.digDef * 100) + '% к защите' : 'нет') + '</div>';
+    h += seen ? ui.unitsHtml(a.units) : '<span class="tip">Состав неизвестен</span>';
+    if (mine) {
       h += '<p class="tip">Коснитесь земли, чтобы идти; чужого города — осада; своего — войти в гарнизон; врага — атака. Shift+щелчок или «Выделить рамкой» — собрать несколько дивизий в армию.</p>';
     } else if (a.isBandit) h += '<p class="tip">Разбойники грабят города и уходят. За их разгром дают добычу.</p>';
     return h;
@@ -141,9 +143,6 @@ const FrontsUI = {
     let h = `<div class="p-head">${grp ? `<span class="flag" style="color:${grp.color}">${Icons.svg('flag')}</span>` : Icons.crest(pl, 40)}<div><h2>${this.esc(title)}</h2>` +
       `<div class="sub">${grp ? divs.length + ' ' + plural(divs.length, 'дивизия', 'дивизии', 'дивизий') + ' · ' : ''}${fmtInt(men)} воинов</div></div></div>`;
     h += '<div class="dbars">' + this.bar('Организованность', this.avgOrg(divs), 'org ' + this.orgCls(this.avgOrg(divs))) + '</div>';
-    h += '<div class="dlist">';
-    for (const a of divs) h += this.divRow(ui, a, s.kind === 'multi' ? { check: true, on: true } : null);
-    h += '</div>';
     h += `<div class="btnrow"><button class="act" type="button" data-act="stop">Стоп</button>` +
       `<button class="act ghost" type="button" data-act="home">Домой</button>` +
       `<button class="act ghost${this.pick === 'front' ? ' on' : ''}" type="button" data-act="dpick" data-v="front">На фронт…</button></div>`;
@@ -151,6 +150,9 @@ const FrontsUI = {
       ? `<button class="act ghost" type="button" data-act="dgroup" data-g="leave">Распустить армию</button>`
       : `<button class="act" type="button" data-act="dgroup" data-g="new">${Icons.svg('flag')}Собрать армию</button><button class="act ghost" type="button" data-act="mclear">Снять выбор</button>`) + '</div>';
     if (this.pick === 'front') h += this.pickHtml(ui, divs);
+    h += '<div class="dlist">';
+    for (const a of divs) h += this.divRow(ui, a, s.kind === 'multi' ? { check: true, on: true } : null);
+    h += '</div>';
     h += '<p class="tip">Коснитесь земли: дивизии пойдут строем, каждая на своё место. Город — осадят вместе, врага — атакуют вместе. Shift+щелчок добавляет дивизию в выделение.</p>';
     return h;
   },
@@ -253,7 +255,7 @@ const FrontsUI = {
   hint(ui, text) {
     const h = document.getElementById('hint');
     if (h) { h.textContent = text; h.hidden = !text; }
-    if (text) ui.toast(text, true);
+    if (text && h && h.offsetParent === null) ui.toast(text, true);
   },
   startTool(ui, kind) {
     const input = ui.app.input;
@@ -371,23 +373,34 @@ function drawFrontsLayer(ctx, r, z, tl, br) {
       ctx.strokeStyle = 'rgba(24,14,6,0.8)'; ctx.lineWidth = 5.5 * px; ctx.stroke();
       ctx.strokeStyle = col; ctx.lineWidth = 3 * px; ctx.stroke();
     }
-    // стрелки ударов
-    if (f.mode === 'attack') for (const a of rt.arrows) {
-      let dx = a.x1 - a.x0, dy = a.y1 - a.y0;
-      const L = Math.hypot(dx, dy);
-      if (L < 0.6) continue;
-      dx /= L; dy /= L;
-      const head = 13 * px, ex = a.x1 - dx * 0.5, ey = a.y1 - dy * 0.5, bx = ex - dx * head, by = ey - dy * head;
-      const c = a.foe ? '#d6402a' : col;
-      ctx.setLineDash([9 * px, 6 * px]); ctx.lineDashOffset = -t * 16 * px;
-      ctx.beginPath(); ctx.moveTo(a.x0, a.y0); ctx.lineTo(bx, by);
-      ctx.strokeStyle = 'rgba(24,14,6,0.75)'; ctx.lineWidth = 7 * px; ctx.stroke();
-      ctx.strokeStyle = c; ctx.lineWidth = 4 * px; ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.beginPath();
-      ctx.moveTo(ex, ey); ctx.lineTo(bx - dy * head * 0.62, by + dx * head * 0.62); ctx.lineTo(bx + dy * head * 0.62, by - dx * head * 0.62); ctx.closePath();
-      ctx.fillStyle = c; ctx.fill();
-      ctx.lineWidth = 2 * px; ctx.strokeStyle = 'rgba(24,14,6,0.85)'; ctx.stroke();
+    // стрелки ударов: по одной на цель, толще — чем больше дивизий бьёт в неё
+    if (f.mode === 'attack' && rt.arrows.length) {
+      const by = new Map();
+      for (const a of rt.arrows) {
+        const key = a.x1.toFixed(1) + ',' + a.y1.toFixed(1);
+        let e = by.get(key);
+        if (!e) by.set(key, e = { x0: 0, y0: 0, x1: a.x1, y1: a.y1, foe: !!a.foe, n: 0 });
+        e.x0 += a.x0; e.y0 += a.y0; e.n++;
+      }
+      for (const a of by.values()) {
+        a.x0 /= a.n; a.y0 /= a.n;
+        let dx = a.x1 - a.x0, dy = a.y1 - a.y0;
+        const L = Math.hypot(dx, dy);
+        if (L < 0.6) continue;
+        dx /= L; dy /= L;
+        const wd = (3.5 + Math.min(4, a.n) * 1.1) * px, head = (10 + Math.min(4, a.n) * 1.6) * px;
+        const ex = a.x1 - dx * 0.55, ey = a.y1 - dy * 0.55, bx = ex - dx * head, by2 = ey - dy * head;
+        const c = a.foe ? '#d6402a' : col;
+        ctx.setLineDash([9 * px, 6 * px]); ctx.lineDashOffset = -t * 16 * px;
+        ctx.beginPath(); ctx.moveTo(a.x0, a.y0); ctx.lineTo(bx, by2);
+        ctx.strokeStyle = 'rgba(24,14,6,0.75)'; ctx.lineWidth = wd + 3 * px; ctx.stroke();
+        ctx.strokeStyle = c; ctx.lineWidth = wd; ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(ex, ey); ctx.lineTo(bx - dy * head * 0.7, by2 + dx * head * 0.7); ctx.lineTo(bx + dy * head * 0.7, by2 - dx * head * 0.7); ctx.closePath();
+        ctx.fillStyle = c; ctx.fill();
+        ctx.lineWidth = 2 * px; ctx.strokeStyle = 'rgba(24,14,6,0.85)'; ctx.stroke();
+      }
     }
   }
   ctx.restore();
@@ -397,7 +410,7 @@ function drawFrontsLayer(ctx, r, z, tl, br) {
 function drawFrontsScreen(ctx, r, z) {
   const g = r.g, pl = g.player, st = g.fr;
   if (!pl) return;
-  if (st && st.fronts.length && z >= 8) {
+  if (st && st.fronts.length && z >= 8 && z < UnitArt.FORMATION_Z) {
     ctx.save();
     ctx.font = '700 12px "PT Sans Narrow", "Arial Narrow", sans-serif';
     ctx.textAlign = 'center';
@@ -405,10 +418,10 @@ function drawFrontsScreen(ctx, r, z) {
       if (f.owner !== pl.id) continue;
       const rt = st.rt.get(f.id);
       if (!rt || !rt.lines.length) continue;
-      const P = rt.lines[0].pts, m = P[P.length >> 1], p = r.toScreen(m.x - m.nx * 1.1, m.y - m.ny * 1.1);
+      const m = rt.lines[0].pts[0], p = r.toScreen(m.x + m.nx * 0.7, m.y + m.ny * 0.7);
       if (p.x < -60 || p.y < -20 || p.x > r.w + 60 || p.y > r.h + 20) continue;
       const txt = f.name + (f.mode === 'attack' ? ' ⚔' : ''), w = ctx.measureText(txt).width + 12;
-      ctx.fillStyle = 'rgba(25,15,8,0.8)';
+      ctx.fillStyle = 'rgba(25,15,8,0.72)';
       r.roundRect(ctx, p.x - w / 2, p.y - 10, w, 18, 6); ctx.fill();
       ctx.fillStyle = '#fff3d6'; ctx.fillText(txt, p.x, p.y + 3);
     }

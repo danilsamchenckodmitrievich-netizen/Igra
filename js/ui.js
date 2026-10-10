@@ -703,6 +703,9 @@ class UI {
     let h = `<div class="p-head">${Icons.crest(pl, 40)}<div><h2>${escapeHtml(pl.name)}</h2><div class="sub">${g.citiesOf(pl.id).length} из ${g.cities.length} городов · для победы нужно ${Math.ceil(g.cities.length * WIN_SHARE)}</div></div></div>`;
     const tabs = [['treasury', 'Казна'], ['trade', 'Рынок'], ['cities', 'Города'], ['rivals', 'Соперники']];
     for (const t of UIExt.kingdomTabs) tabs.push([t.id, t.title]);
+    // «Армии» (дивизии и фронты) — перед «Соперниками»
+    const ai = tabs.findIndex(t => t[0] === 'fronts'), ri = tabs.findIndex(t => t[0] === 'rivals');
+    if (ai > ri && ri >= 0) tabs.splice(ri, 0, tabs.splice(ai, 1)[0]);
     const extTab = UIExt.kingdomTabs.find(t => t.id === this.kTab);
     h += '<div class="tabs">' + tabs.map(([v, n]) => `<button type="button" data-act="ktab" data-v="${v}" class="${this.kTab === v ? 'on' : ''}">${n}</button>`).join('') + '</div>';
     if (extTab) {

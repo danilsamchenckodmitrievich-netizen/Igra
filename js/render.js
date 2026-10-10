@@ -788,7 +788,7 @@ class Renderer {
     if (z >= UnitArt.FORMATION_Z) {
       const undo = this.pairBattles(list);
       try { UnitArt.drawArmies(this, ctx, list); } finally { undo(); }
-      for (const d of this.drawnArmies) this.drawPlate(ctx, d.a, d.x, d.y - Math.max(d.r, S * 0.62) - S * 0.3, S, true);
+      for (const d of this.drawnArmies) this.drawPlate(ctx, d.a, d.x, d.y - Math.max(d.r, S * 0.62) - S * 0.42, S, true);
       return;
     }
     const placed = [];

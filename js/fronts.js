@@ -34,6 +34,8 @@ const DIV = {
   queueMax: 24,       // очередь найма при обучении дивизии
   spacing: 1.25,      // разнос дивизий в строю армии
   frontGap: 0.7,      // на сколько клеток позади линии фронта стоят дивизии
+  slotGap: 1.1,       // расстояние между соседними дивизиями вдоль линии; на короткой линии встают вторым рядом
+  rowGap: 0.95,       // и вторым, третьим рядом — на столько глубже
   borderEvery: 3,     // раз в столько секунд перестраиваем фронт по границе (если земли сдвинулись)
   reach: 14,          // насколько глубоко за линией ищем цели наступления
   engage: 3.2,        // вражеская дивизия ближе — цель удара
@@ -340,6 +342,7 @@ const Fronts = {
     const f = { id: g.newId(), owner, kind: 'border', enemy, mode: 'hold', name: 'Фронт: ' + this.enemyName(g, enemy), pts: null, ai: !!ai };
     st.fronts.push(f);
     if (divs) this.assign(g, f, divs);
+    this.tickFront(g, f, true);
     return f;
   },
   // Нарисованная линия фронта: pts — точки в клетках.
@@ -352,6 +355,7 @@ const Fronts = {
     const f = { id: g.newId(), owner, kind: 'line', enemy: null, mode: 'hold', name: 'Линия фронта №' + n, pts: pts.map(p => [Math.round(p[0] * 100) / 100, Math.round(p[1] * 100) / 100]), ai: false };
     st.fronts.push(f);
     if (divs) this.assign(g, f, divs);
+    this.tickFront(g, f, true);
     return f;
   },
   assign(g, f, divs) {
@@ -562,12 +566,15 @@ const Fronts = {
     return { d: Math.sqrt(bd), s: best.s, side: (x - q.x) * q.nx + (y - q.y) * q.ny, q };
   },
   // n мест вдоль линий фронта, поровну по длине; каждое — чуть позади линии, на своей стороне.
+  // Если линия коротка для одного ряда, часть дивизий встаёт вторым и третьим рядом глубже.
   slotsOn(g, lines, n) {
     let total = 0;
     for (const l of lines) total += l.len;
     const w = g.world, out = [];
+    const perRow = Math.max(1, Math.min(n, Math.floor(total / DIV.slotGap) + 1));
     for (let i = 0; i < n; i++) {
-      let s = (i + 0.5) * total / n, li = 0;
+      const row = Math.floor(i / perRow), col = i % perRow, inRow = Math.min(perRow, n - row * perRow);
+      let s = (col + 0.5) * total / inRow, li = 0;
       while (li < lines.length - 1 && s > lines[li].len) { s -= lines[li].len; li++; }
       const P = lines[li].pts;
       let k = 1;
@@ -577,9 +584,10 @@ const Fronts = {
       let nx = a.nx + (b.nx - a.nx) * t, ny = a.ny + (b.ny - a.ny) * t;
       const nl = Math.hypot(nx, ny) || 1;
       nx /= nl; ny /= nl;
-      let x = lx + nx * DIV.frontGap, y = ly + ny * DIV.frontGap;
+      const depth = DIV.frontGap + row * DIV.rowGap;
+      let x = lx + nx * depth, y = ly + ny * depth;
       // в воду и в горы без прохода не ставим: отступаем вглубь своих земель
-      for (let d = DIV.frontGap; d < 3; d += 0.5) {
+      for (let d = depth; d < depth + 2.3; d += 0.5) {
         const ti = w.tileAt(lx + nx * d, ly + ny * d);
         if (ti >= 0 && w.passable(ti) && w.main[ti]) { x = lx + nx * d; y = ly + ny * d; break; }
       }
