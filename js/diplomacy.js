@@ -1095,8 +1095,8 @@ const DipView = typeof document === 'undefined' ? null : {
     const kb = document.getElementById('kingdom-btn'), left = document.getElementById('left'), hud = document.getElementById('hud');
     if (!kb || !left || !hud) return null;
     kb.insertAdjacentHTML('afterend', '<button id="dip-btn" type="button" title="Дипломатия: войны, мир, союзы" hidden></button>');
-    left.insertAdjacentHTML('beforeend', '<div id="dip-offer" hidden></div>');
-    hud.insertAdjacentHTML('beforeend', '<div id="dip-ask" hidden></div>');
+    // карточки предложения и запроса войны — по центру под планкой: слева их закрывает миникарта
+    hud.insertAdjacentHTML('beforeend', '<div id="dip-float"><div id="dip-offer" hidden></div><div id="dip-ask" hidden></div></div>');
     const dom = { btn: document.getElementById('dip-btn'), off: document.getElementById('dip-offer'), ask: document.getElementById('dip-ask'), offId: null, btnHtml: '' };
     dom.btn.addEventListener('click', () => { this.sfx('click'); this.openTab(); });
     dom.off.addEventListener('click', e => {
@@ -1333,7 +1333,9 @@ if (DipView) {
     '#dip-offer .act{min-height:36px;padding:5px 8px}',
     '#dip-offer .tip{font-size:12px}',
     '#dip-offer{background:linear-gradient(180deg,#fff6db,#f5e5bb);border:2px solid #c8962e;border-radius:10px}',
-    '#dip-ask{position:absolute;left:50%;top:calc(var(--top) + 52px);transform:translateX(-50%);width:420px;max-width:92vw;background:var(--paper);border:2px solid #a63a28;border-radius:10px;padding:9px 12px;box-shadow:0 8px 26px rgba(0,0,0,.5);z-index:5}',
+    '#dip-float{position:absolute;left:50%;top:calc(var(--top) + 8px);transform:translateX(-50%);width:min(400px,92vw);display:flex;flex-direction:column;gap:6px;z-index:5;pointer-events:none}',
+    '#dip-float>*{pointer-events:auto}',
+    '#dip-ask{background:var(--paper);border:2px solid #a63a28;border-radius:10px;padding:9px 12px;box-shadow:0 8px 26px rgba(0,0,0,.5)}',
     '#dip-btn{display:flex;align-items:center;gap:4px;flex:none;background:rgba(0,0,0,.25);border:1px solid var(--wood-line);border-radius:7px;color:#f3e3bd;padding:3px 8px;min-height:32px;font-weight:700}',
     '#dip-btn.war{background:rgba(150,36,22,.9);border-color:#e0806a;color:#fff1e0}',
     '#dip-btn .dot{width:8px;height:8px;border-radius:50%;background:var(--gold-hi);box-shadow:0 0 0 2px rgba(243,213,138,.4)}',
