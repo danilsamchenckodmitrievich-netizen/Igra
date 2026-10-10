@@ -1,5 +1,5 @@
 'use strict';
-// ИИ соперничающих держав: хозяйство, найм, оборона, захват вольных и вражеских городов.
+// ИИ соперничающих держав: хозяйство, найм, дивизии и армии, оборона, фронт и наступление на вольные и вражеские города.
 
 const AI = {
   update(g, dt) {
@@ -149,6 +149,12 @@ const AI = {
     const target = k.ai.target ? g.city(k.ai.target) : null;
     if (B('workshop') >= 1 && target && target.walls >= 1) w.push([B('workshop') >= 2 ? 'catapult' : 'ram', 2.5]);
     if (!w.length) w.push(['militia', 1]);
+    // чаще докупаем недостающее до лучшего шаблона дивизии, который может собрать этот город
+    const want = this.wantTemplate(g, k, c);
+    if (want && g.rng.chance(0.6)) {
+      const lack = Fronts.lacking(c.garrison, want.units);
+      for (const u of UNIT_ORDER) if (lack[u] && !g.recruitBlock(c, u)) return u;
+    }
     const ok = w.filter(([u]) => !g.recruitBlock(c, u));
     if (!ok.length) return null;
     let sum = 0;
@@ -158,93 +164,150 @@ const AI = {
     return ok[0][0];
   },
 
+  wantTemplate(g, k, c) {
+    const target = k.ai.target ? g.city(k.ai.target) : null;
+    let best = null, bp = 0;
+    for (const t of DIV_TEMPLATES) {
+      if (t.id === 'siege' && !(target && target.walls >= 2)) continue;
+      let ok = true;
+      for (const u in t.units) { const n = UNITS[u].need; if (n && (c.buildings[n[0]] || 0) < n[1]) { ok = false; break; } }
+      if (!ok) continue;
+      const p = unitPower(t.units);
+      if (p > bp) { bp = p; best = t; }
+    }
+    return best;
+  },
+
   minGarrison(g, k, c, ctx) {
     const threat = ctx.threats.filter(t => t.city === c).reduce((s, t) => s + t.power, 0);
     return (c.isCapital ? 260 : 110) + c.level * 30 + threat * 0.4;
   },
 
+  // Войско: дивизии по шаблонам из лишних воинов гарнизонов, армия из полевых дивизий, оборона городов
+  // и фронт по границе с выбранным врагом (вольные города или держава) — наступление, если хватает сил.
   military(g, k, ctx) {
-    const armies = g.armiesOf(k.id);
-    // 1. Оборона: идём на того, кто осаждает или идёт к нашему городу
+    this.defend(g, k, ctx);
+    this.formDivisions(g, k, ctx);
+    for (const a of g.armiesOf(k.id)) if (a.ai === 'defend' && a.state === 'idle') a.ai = null;
+    this.war(g, k, ctx);
+  },
+
+  // 1. Оборона: на тех, кто осаждает или идёт к нашему городу, — ближайшие свободные дивизии, пока хватает сил.
+  defend(g, k, ctx) {
+    const divs = g.armiesOf(k.id), used = new Set();
     for (const t of ctx.threats) {
-      if (t.d > 10 && !(t.army.state === 'siege')) continue;
+      if (t.d > 10 && t.army.state !== 'siege') continue;
       if (t.army.isBandit && t.power < 120) continue;
-      const free = armies.filter(a => a.state === 'idle' || (a.state === 'move' && a.ai !== 'defend'));
-      let best = null, bd = Infinity;
-      for (const a of free) {
-        const d = dist(a.x, a.y, t.army.x, t.army.y);
-        if (unitPower(a.units) >= t.power * 0.9 && d < bd && d < 30) { bd = d; best = a; }
-      }
-      if (best) {
-        if (!g.order(best, { kind: 'army', id: t.army.id })) best.ai = 'defend';
+      let have = 0;
+      for (const a of divs) if (a.dest && a.dest.kind === 'army' && a.dest.id === t.army.id) have += unitPower(a.units);
+      if (have >= t.power * 0.9) continue;
+      const free = divs.filter(a => !used.has(a) && (a.state === 'idle' || a.state === 'move') && a.ai !== 'defend' && a.org >= DIV.attackOrg &&
+        dist(a.x, a.y, t.army.x, t.army.y) < 30);
+      free.sort((p, q) => dist(p.x, p.y, t.army.x, t.army.y) - dist(q.x, q.y, t.army.x, t.army.y));
+      const team = [];
+      let p = have;
+      for (const a of free) { team.push(a); p += unitPower(a.units); if (p >= t.power * 0.9) break; }
+      if (p < t.power * 0.9) continue;
+      for (const a of team) {
+        if (!g.order(a, { kind: 'army', id: t.army.id })) { a.ai = 'defend'; a.front = null; used.add(a); }
       }
     }
-    // 2. Сбор лишних войск из гарнизонов в полевую армию
+  },
+
+  // 2. Лишние воины гарнизонов уходят в поле дивизиями: по шаблону, если состав подходит, иначе сводной.
+  formDivisions(g, k, ctx) {
     for (const c of ctx.cities) {
       if (c.siegeBy) continue;
-      const extra = unitPower(c.garrison) - this.minGarrison(g, k, c, ctx);
-      if (extra < 120) continue;
-      const take = {};
-      let got = 0;
-      for (const u of ['knight', 'cavalry', 'sword', 'crossbow', 'catapult', 'ram', 'spear', 'archer', 'militia']) {
-        const n = c.garrison[u] || 0;
-        if (!n) continue;
-        const sq = UNITS[u].squad;
-        const per = unitPower({ [u]: sq });
-        const squads = Math.min(Math.floor(n / sq), Math.floor((extra - got) / per));
-        if (squads > 0) { take[u] = squads * sq; got += squads * per; }
-        if (got >= extra) break;
-      }
-      if (menCount(take) < 10) continue;
-      const a = g.formArmy(c, take);
-      if (a) {
-        a.name = 'Войско ' + (k.name.split(' ').pop());
-        // сливаем с ближайшей свободной армией
-        const host = armies.find(o => o.state === 'idle' && dist(o.x, o.y, a.x, a.y) < 1.5);
-        if (host) g.mergeInto(host, a);
-        else armies.push(a);
-      }
-    }
-    // 3. Объединяем праздные армии в одну главную
-    const idle = g.armiesOf(k.id).filter(a => a.state === 'idle' && a.ai !== 'defend');
-    if (idle.length >= 2) {
-      idle.sort((a, b) => unitPower(b.units) - unitPower(a.units));
-      const main = idle[0];
-      for (const a of idle.slice(1)) {
-        if (dist(a.x, a.y, main.x, main.y) < 1.2) g.mergeInto(main, a);
-        else if (a.state === 'idle') g.order(a, { kind: 'army', id: main.id });
+      let extra = unitPower(c.garrison) - this.minGarrison(g, k, c, ctx);
+      for (let guard = 0; guard < 3 && extra >= 120; guard++) {
+        let best = null, bp = 0;
+        for (const t of DIV_TEMPLATES) {
+          if (!Fronts.fits(c.garrison, t.units)) continue;
+          const p = unitPower(t.units);
+          if (p <= extra * 1.15 && p > bp) { bp = p; best = t; }
+        }
+        let a = null;
+        if (best) { a = g.formArmy(c, best.units, best.id); extra -= bp; }
+        else {
+          const take = {};
+          let got = 0;
+          for (const u of ['knight', 'cavalry', 'sword', 'crossbow', 'catapult', 'ram', 'spear', 'archer', 'militia']) {
+            const n = c.garrison[u] || 0;
+            if (!n) continue;
+            const sq = UNITS[u].squad;
+            const per = unitPower({ [u]: sq });
+            const squads = Math.min(Math.floor(n / sq), Math.floor((extra - got) / per));
+            if (squads > 0) { take[u] = squads * sq; got += squads * per; }
+            if (got >= extra) break;
+          }
+          if (menCount(take) >= 10) a = g.formArmy(c, take);
+          extra = 0;
+        }
+        if (!a) break;
       }
     }
-    for (const a of g.armiesOf(k.id)) if (a.ai === 'defend' && a.state === 'idle') a.ai = null;
-    // 4. Наступление
-    const main = g.armiesOf(k.id).filter(a => a.state === 'idle' && a.ai !== 'defend').sort((a, b) => unitPower(b.units) - unitPower(a.units))[0];
-    if (!main) return;
-    const power = unitPower(main.units);
-    const siege = siegePower(main.units);
-    let best = null, bs = Infinity;
-    for (const c of g.cities) {
-      if (c.owner === k.id) continue;
-      const isKingdom = c.owner !== -1;
-      if (isKingdom && g.time < GRACE_TIME) continue;
-      const ok = g.kingdom(c.owner);
-      if (isKingdom && (!ok || !ok.alive)) continue;
+  },
+
+  // 3–4. Армия и фронт: цель — посильный город (вольный, после перемирия — и державы); фронт по границе
+  // с его хозяином, все полевые дивизии на фронте; хватает сил — наступление, нет — оборона.
+  war(g, k, ctx) {
+    const field = g.armiesOf(k.id).filter(a => a.ai !== 'defend');
+    if (!field.length) return;
+    let grp = Fronts.groupsOf(g, k.id)[0];
+    const loose = field.filter(a => a.group === null || a.group === undefined);
+    if (loose.length) {
+      if (!grp) grp = Fronts.makeGroup(g, k.id, loose, 'Войско: ' + k.name.split(' ').pop());
+      else for (const a of loose) a.group = grp.id;
+    }
+    let power = 0, siege = 0, cx = 0, cy = 0;
+    for (const a of field) { power += unitPower(a.units); siege += siegePower(a.units); cx += a.x; cy += a.y; }
+    cx /= field.length; cy /= field.length;
+    const need = c => {
       const def = this.cityDefense(g, c);
       const wallsHard = c.walls >= 2 && c.wallHp > 0 && siege < 10;
-      const need = def * (wallsHard ? 2.2 : 1.35) / g.diff.aggression;
-      if (power < need) continue;
-      const d = dist(c.x, c.y, main.x, main.y);
-      let score = d * 1.5 + def / 40;
-      if (isKingdom && ok.isPlayer) score *= 1.15 / g.diff.aggression;
-      if (c.isCapital) score *= 0.85;
-      if (score < bs) { bs = score; best = c; }
-    }
-    if (best) {
-      k.ai.target = best.id;
-      g.order(main, { kind: 'city', id: best.id });
-      if (best.owner !== -1 && g.kingdom(best.owner).isPlayer) {
-        main.ai = 'attack';
-        if (g.isVisible(main.x, main.y)) g.notify(k.name + ' двинуло войско на ' + best.name + '!', 'bad', best, true);
+      return def * (wallsHard ? 2.2 : 1.35) / g.diff.aggression;
+    };
+    const valid = c => {
+      if (!c || c.owner === k.id) return false;
+      if (c.owner !== -1) {
+        if (g.time < GRACE_TIME || !g.isHostile(k.id, c.owner)) return false;
+        const ok = g.kingdom(c.owner);
+        if (!ok || !ok.alive) return false;
       }
+      return true;
+    };
+    let best = null;
+    const prev = k.ai.target ? g.city(k.ai.target) : null;
+    if (prev && k.ai.warUntil > g.time && valid(prev) && power >= need(prev) * 0.8) best = prev;
+    if (!best) {
+      let bs = Infinity;
+      for (const c of g.cities) {
+        if (!valid(c) || power < need(c)) continue;
+        const ok = g.kingdom(c.owner);
+        let score = dist(c.x, c.y, cx, cy) * 1.5 + this.cityDefense(g, c) / 40;
+        if (ok && ok.isPlayer) score *= 1.15 / g.diff.aggression;
+        if (c.isCapital) score *= 0.85;
+        if (score < bs) { bs = score; best = c; }
+      }
+      if (best) k.ai.warUntil = g.time + 45;
+    }
+    let f = Fronts.frontsOf(g, k.id)[0];
+    if (!best) {
+      if (f) { Fronts.assign(g, f, field.filter(a => a.front !== f.id)); if (f.mode !== 'hold') Fronts.setMode(g, f, 'hold'); }
+      return;
+    }
+    const newTarget = k.ai.target !== best.id;
+    k.ai.target = best.id;
+    if (!f || f.enemy !== best.owner) {
+      if (f) Fronts.removeFront(g, f);
+      f = Fronts.makeBorderFront(g, k.id, best.owner, null, true);
+    }
+    Fronts.assign(g, f, field.filter(a => a.front !== f.id));
+    const was = f.mode;
+    if (f.mode !== 'attack') Fronts.setMode(g, f, 'attack');
+    const ok = g.kingdom(best.owner);
+    if (ok && ok.isPlayer && (was !== 'attack' || newTarget) && field.some(a => g.isVisible(a.x, a.y))) {
+      g.notify(k.name + ' двинуло войско на ' + best.name + '!', 'bad', best, true);
     }
   },
 };
