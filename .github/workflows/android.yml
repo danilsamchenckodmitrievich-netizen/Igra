@@ -9,6 +9,7 @@ on:
       - 'fonts/**'
       - 'icon.png'
       - 'android/**'
+      - 'tools/build-web.js'
       - '.github/workflows/android.yml'
   workflow_dispatch:
 
@@ -47,6 +48,9 @@ jobs:
       - name: Переименовать APK
         run: cp android/app/build/outputs/apk/release/app-release.apk zheleznaya-korona.apk
 
+      - name: Собрать версию для ПК одним файлом
+        run: node tools/build-web.js zheleznaya-korona.html
+
       - name: Включить KVM для эмулятора
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -78,6 +82,7 @@ jobs:
           name: zheleznaya-korona
           path: |
             zheleznaya-korona.apk
+            zheleznaya-korona.html
             emulator.png
             logcat.txt
           if-no-files-found: ignore
@@ -90,9 +95,11 @@ jobs:
           target_commitish: ${{ github.sha }}
           make_latest: true
           body: |
-            Скачайте `zheleznaya-korona.apk` на телефон и откройте файл. Android попросит разрешить установку из этого источника — разрешите.
+            **Телефон (Android):** скачайте `zheleznaya-korona.apk` и откройте файл. Android попросит разрешить установку из этого источника — разрешите.
             Новые версии ставятся поверх старых, сохранения не теряются.
+            **ПК:** скачайте `zheleznaya-korona.html` и откройте двойным щелчком — игра запустится в браузере (Chrome, Edge, Firefox, Яндекс Браузер), интернет не нужен.
             Сборка проверена запуском в эмуляторе Android 11 (снимок экрана — `emulator.png`).
           files: |
             zheleznaya-korona.apk
+            zheleznaya-korona.html
             emulator.png
