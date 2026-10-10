@@ -361,6 +361,17 @@ const Diplomacy = {
     g.emit('diplomacy', { type: 'ally', a, b });
     return null;
   },
+  // плательщик сам перестаёт платить дань — получатель запомнит
+  stopTribute(g, payer, other) {
+    const r = this.rel(g, payer, other);
+    if (!r || !r.trib || r.trib.from !== payer) return 'Дани нет';
+    r.trib = null;
+    this.remember(g, r, other, 'перестали платить дань', -20);
+    this.bump(g);
+    const k = g.kingdom(other), pl = g.player;
+    if (pl && payer === pl.id && k) g.notify('Мы перестали платить дань державе «' + k.name + '»', 'war', g.city(k.capital));
+    return null;
+  },
   breakAlliance(g, a, b, quiet) {
     const r = this.rel(g, a, b);
     if (!r || r.st !== 'ally') return 'Союза нет';
@@ -823,3 +834,509 @@ Mods.add({
     },
   },
 });
+
+// ---------- интерфейс (только в браузере): вкладка «Дипломатия», предложения, кнопка в планке, границы войны ----------
+const DipView = typeof document === 'undefined' ? null : {
+  open: null,       // раскрытая держава во вкладке
+  terms: false,     // раскрыт выбор условий мира
+  confirm: null,    // держава, войну которой ждёт подтверждения
+  answers: {},      // id державы → { ok, text, until } — последний ответ на наши предложения
+  ask: null,        // приказ, упёршийся в мир: { army, owner, target, until }
+  syncT: 0,
+  dom: null,
+  runs: [], runsKey: '', runsB: null,
+
+  icons() {
+    if (typeof ICON_PATHS === 'undefined' || ICON_PATHS.dipally) return;
+    // два сцепленных кольца — союз
+    ICON_PATHS.dipally = 'M7.5 7a5 5 0 1 0 0 10a5 5 0 1 0 0-10zM7.5 9.2a2.8 2.8 0 1 1 0 5.6a2.8 2.8 0 1 1 0-5.6zM16.5 7a5 5 0 1 0 0 10a5 5 0 1 0 0-10zM16.5 9.2a2.8 2.8 0 1 1 0 5.6a2.8 2.8 0 1 1 0-5.6z';
+  },
+  attach(g) {
+    if (g.opts.spectate) return;
+    g.on((t, d) => {
+      if (t === 'peaceBlock' && d.army.owner === g.player.id) this.showAsk(g, d);
+    });
+  },
+  sfx(name) { if (typeof Sfx !== 'undefined') Sfx.play(name); },
+  // вкладка «Дипломатия» панели державы
+  openTab() {
+    if (typeof App === 'undefined' || !App.ui) return;
+    App.ui.kTab = 'dip';
+    App.ui.select({ kind: 'kingdom' });
+  },
+  refreshPanel() {
+    if (typeof App === 'undefined' || !App.ui || !App.ui.sel) return;
+    App.ui.html = '';
+    App.ui.renderPanel();
+  },
+
+  // ---------- вкладка ----------
+  tabHtml(g, pl, ui) {
+    this.icons();
+    const D = Diplomacy;
+    let h = '<div class="pane" data-key="pane-dip">';
+    for (const o of g.dip.offers) if (o.to === pl.id) h += this.offerHtml(g, o);
+    const rank = k => !k.alive ? 9 : { war: 0, ally: 1, peace: 2 }[D.state(g, pl.id, k.id)] || 3;
+    const list = g.kingdoms.filter(k => D.regular(k) && !k.isPlayer).sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+    if (this.open === null) { const w = list.find(k => k.alive && D.state(g, pl.id, k.id) === 'war'); if (w) this.open = w.id; }
+    h += '<div class="dp-list">';
+    for (const k of list) h += this.cardHtml(g, pl, k, ui);
+    h += '</div>';
+    h += `<p class="tip">${g.time < GRACE_TIME ? 'Первые ' + fmtTime(GRACE_TIME) + ' — всеобщее перемирие. ' : ''}` +
+      'Нападать можно только на тех, с кем война. Мнение держав зависит от договоров, соседства, обид и общих врагов; ИИ соглашается по счёту войны, силе и мнению. ' +
+      `Поражение — если соперник займёт ${Math.ceil(g.cities.length * LOSE_SHARE)} городов; союзная победа — если все уцелевшие соперники ваши союзники и вместе вы держите ${Math.ceil(g.cities.length * WIN_SHARE)}.</p>`;
+    return h + '</div>';
+  },
+  offerHtml(g, o, floating) {
+    const k = g.kingdom(o.from);
+    const bad = o.kind === 'demand' || o.kind === 'call' || (o.kind === 'peace' && o.terms && ((o.terms.kind === 'tribute' && o.terms.payer === o.to) || (o.terms.kind === 'city' && o.terms.giver === o.to)));
+    const left = fmtTime(Math.max(0, o.until - g.time));
+    let h = `<div class="box dp-offer${bad ? ' bad' : ''}" data-key="of-${o.id}"><div class="dp-ot">${Icons.crest(k, 28)}<span><b>${escapeHtml(k.name)}</b> ${escapeHtml(Diplomacy.offerText(g, o))}</span></div>`;
+    h += `<div class="dp-acts"><button class="act" type="button" data-act="dip" data-op="yes" data-id="${o.id}">${Icons.svg('check')}Принять</button>` +
+      `<button class="act ghost" type="button" data-act="dip" data-op="no" data-id="${o.id}">Отклонить</button>` +
+      `<span class="dp-timer" title="Ответить нужно до истечения срока">${Icons.svg('hourglass')}<span class="dp-left">${floating ? '' : left}</span></span></div>`;
+    if (o.kind === 'demand') h += '<p class="tip">Откажете — держава может объявить войну.</p>';
+    else if (o.kind === 'call' && o.terms && o.terms.defensive) h += '<p class="tip">Откажете — союз будет расторгнут.</p>';
+    return h + '</div>';
+  },
+  stateWord(g, r) {
+    if (r.st === 'war') return ['war', 'Война'];
+    if (r.st === 'ally') return ['ally', 'Союз'];
+    return g.time < r.truce ? ['truce', 'Перемирие'] : ['peace', 'Мир'];
+  },
+  cardHtml(g, pl, k, ui) {
+    const D = Diplomacy, r = D.rel(g, pl.id, k.id);
+    const head = `${Icons.crest(k, 26)}<span class="nm">${escapeHtml(k.name)}</span>`;
+    if (!k.alive || !r) return `<div class="dp-k dead" data-key="dk-${k.id}"><div class="dp-row">${head}<span class="dp-st">пала</span></div></div>`;
+    const open = this.open === k.id;
+    const [cls, word] = this.stateWord(g, r);
+    const op = D.opinion(g, k.id, pl.id);
+    const opc = op.v >= 10 ? 'pos' : op.v <= -10 ? 'neg' : '';
+    let h = `<div class="dp-k ${r.st}${open ? ' open' : ''}" data-key="dk-${k.id}">`;
+    h += `<button class="dp-row" type="button" data-act="dip" data-op="open" data-k="${k.id}" aria-expanded="${open}">${head}` +
+      `<span class="dp-st ${cls}">${word}</span><span class="dp-op ${opc}" title="Мнение о нас">${fmtRate(op.v)}</span><i class="dp-chev"></i></button>`;
+    if (!open) return h + '</div>';
+    h += '<div class="dp-body">';
+    // мнение и причины
+    const parts = op.parts.slice().sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    h += `<div class="dp-line"><span class="k">Мнение о нас</span><b class="dp-op ${opc}">${fmtRate(op.v)}</b></div>`;
+    if (parts.length) h += '<div class="infl-parts">' + parts.map(([t, v]) => `<span class="ip${v < 0 ? ' neg' : ''}">${escapeHtml(t)} <b>${fmtRate(v)}</b></span>`).join('') + '</div>';
+    // сила, города, союзы и войны
+    const known = g.citiesOf(k.id).some(c => g.explored[g.cityTile(c)]);
+    const pw = known ? ui.powerWord(AI.totalPower(g, k), AI.totalPower(g, pl)) : 'неизвестно';
+    h += `<div class="dp-line"><span class="k">Войско</span><b>${pw}</b><span class="k">Городов</span><b>${g.citiesOf(k.id).length}</b></div>`;
+    const names = st => D.others(g, k.id).filter(x => x.id !== pl.id && D.state(g, k.id, x.id) === st).map(x => escapeHtml(x.name)).join(', ');
+    const wars = names('war'), allies = names('ally');
+    if (wars) h += `<div class="dp-line"><span class="k">Воюет с</span><span>${wars}</span></div>`;
+    if (allies) h += `<div class="dp-line"><span class="k">Союзники</span><span>${allies}</span></div>`;
+    // договоры
+    const chips = [];
+    if (g.time < r.truce) chips.push(`${Icons.svg('flag')}перемирие ${fmtTime(r.truce - g.time)}`);
+    if (r.trade) chips.push(`${Icons.svg('gold')}торговля +${D.tradeGold(g, r)} зол./мин`);
+    if (r.nap > g.time) chips.push(`${Icons.svg('shield')}ненападение ${fmtTime(r.nap - g.time)}`);
+    if (r.trib && r.trib.until > g.time) chips.push(`${Icons.svg('coin')}${r.trib.from === pl.id ? 'мы платим' : 'нам платят'} ${r.trib.gold} зол./мин · ${fmtTime(r.trib.until - g.time)}`);
+    h += `<div class="dp-line"><span class="k">Договоры</span>${chips.length ? chips.map(c => `<span class="dp-chip">${c}</span>`).join('') : '<span class="muted">нет</span>'}</div>`;
+    // счёт войны
+    if (r.st === 'war') {
+      const bal = D.balance(r, pl.id), s = D.side(r, pl.id);
+      const word2 = bal > 15 ? 'мы побеждаем' : bal < -15 ? 'мы проигрываем' : 'равная борьба';
+      h += `<div class="dp-score"><div class="dp-line"><span class="k">Счёт войны</span><b class="dp-op ${bal > 0 ? 'pos' : bal < 0 ? 'neg' : ''}">${fmtRate(bal)}</b><span class="muted">${word2} · ${fmtTime(g.time - r.since)}</span></div>` +
+        `<div class="dp-bar"><i class="${bal >= 0 ? 'pos' : 'neg'}" style="left:${bal >= 0 ? 50 : 50 + bal / 2}%;width:${Math.abs(bal) / 2}%"></i><b></b></div>` +
+        `<div class="dp-line muted">Взято городов ${r.wc[s]} : ${r.wc[1 - s]} · выиграно боёв ${r.wb[s]} : ${r.wb[1 - s]}</div></div>`;
+    }
+    const ans = this.answers[k.id];
+    if (ans && ans.until > g.time) h += `<div class="dp-ans ${ans.ok ? 'ok' : 'no'}">${escapeHtml(ans.text)}</div>`;
+    h += this.actsHtml(g, pl, k, r);
+    return h + '</div></div>';
+  },
+  btn(op, k, label, cls, extra) {
+    return `<button class="act ${cls || ''}" type="button" data-act="dip" data-op="${op}" data-k="${k.id}"${extra || ''}>${label}</button>`;
+  },
+  actsHtml(g, pl, k, r) {
+    const D = Diplomacy;
+    let h = '<div class="dp-acts">';
+    if (r.st === 'war') {
+      h += this.btn('terms', k, `${Icons.svg('scroll')}Предложить мир…`, this.terms ? '' : 'ghost');
+      h += '</div>';
+      if (this.terms) {
+        const theirs = D.tributeGold(g, k), ours = D.tributeGold(g, pl);
+        const cTake = D.borderCity(g, k.id, pl.id), cGive = D.borderCity(g, pl.id, k.id);
+        h += '<div class="dp-terms">';
+        h += this.btn('peace', k, 'Белый мир — без условий', 'ghost', ' data-v="white"');
+        h += this.btn('peace', k, `Мир, они платят нам дань ${theirs} зол./мин`, 'ghost', ' data-v="theypay"');
+        h += this.btn('peace', k, `Мир, мы платим дань ${ours} зол./мин`, 'ghost', ' data-v="wepay"');
+        if (cTake) h += this.btn('peace', k, `Мир, они отдают нам ${escapeHtml(cTake.name)}`, 'ghost', ` data-v="theygive" data-c="${cTake.id}"`);
+        if (cGive) h += this.btn('peace', k, `Мир, мы отдаём ${escapeHtml(cGive.name)}`, 'ghost', ` data-v="wegive" data-c="${cGive.id}"`);
+        h += `<p class="tip">Дань — на ${fmtTime(DIPLO.tribute)}. После мира ${fmtTime(DIPLO.truce)} перемирия: войну объявить нельзя.</p></div>`;
+      }
+      return h;
+    }
+    // мир или союз
+    if (this.confirm === k.id) {
+      h += `<span class="dp-q">Объявить войну державе «${escapeHtml(k.name)}»?</span>` + this.btn('war', k, `${Icons.svg('swords')}Да, война!`, 'dp-red') + this.btn('nowar', k, 'Нет', 'ghost');
+      return h + '</div>';
+    }
+    if (r.st === 'ally') h += this.btn('unally', k, 'Разорвать союз', 'ghost');
+    else {
+      const block = D.declareBlock(g, pl.id, k.id);
+      h += block ? `<button class="act dp-red" type="button" disabled title="${escapeHtml(block)}">${Icons.svg('lock')}${escapeHtml(block)}</button>`
+        : this.btn('war', k, `${Icons.svg('swords')}Объявить войну`, 'dp-red');
+      h += this.btn('ally', k, `${Icons.svg('dipally')}Предложить союз`);
+    }
+    if (!r.trade) h += this.btn('trade', k, `${Icons.svg('gold')}Торговый договор`, 'ghost');
+    if (r.st === 'peace' && r.nap <= g.time) h += this.btn('nap', k, `${Icons.svg('shield')}Ненападение`, 'ghost');
+    if (r.trib && r.trib.until > g.time) {
+      if (r.trib.from === pl.id) h += this.btn('stoppay', k, 'Перестать платить дань', 'ghost');
+    } else {
+      h += this.btn('demand', k, `Потребовать дань ${D.tributeGold(g, k)} зол./мин`, 'ghost');
+      h += this.btn('pay', k, `Платить дань ${D.tributeGold(g, pl)} зол./мин`, 'ghost');
+    }
+    return h + '</div>';
+  },
+
+  // ---------- действия (data-act="dip") ----------
+  act(d, ui) {
+    const g = ui.g, pl = g.player, D = Diplomacy;
+    if (d.op === 'yes' || d.op === 'no') return this.answerOffer(g, +d.id, d.op === 'yes', ui);
+    const kid = +d.k, k = g.kingdom(kid);
+    if (!k) return;
+    switch (d.op) {
+      case 'open': this.open = this.open === kid ? -1 : kid; this.terms = false; this.confirm = null; return;
+      case 'terms': this.terms = !this.terms; this.confirm = null; return;
+      case 'nowar': this.confirm = null; return;
+      case 'war': {
+        if (this.confirm !== kid) { this.confirm = kid; return; }
+        this.confirm = null;
+        const err = D.declareWar(g, pl.id, kid);
+        if (err) return err;
+        this.sfx('horn');
+        return;
+      }
+      case 'unally': D.breakAlliance(g, pl.id, kid); this.sfx('click'); return;
+      case 'stoppay': return D.stopTribute(g, pl.id, kid) || undefined;
+      case 'peace': {
+        const v = d.v;
+        let t = { kind: 'white' };
+        if (v === 'theypay') t = { kind: 'tribute', payer: kid, gold: D.tributeGold(g, k) };
+        else if (v === 'wepay') t = { kind: 'tribute', payer: pl.id, gold: D.tributeGold(g, pl) };
+        else if (v === 'theygive') t = { kind: 'city', giver: kid, city: +d.c };
+        else if (v === 'wegive') t = { kind: 'city', giver: pl.id, city: +d.c };
+        this.terms = false;
+        return this.propose(g, pl, k, 'peace', t, ui);
+      }
+      case 'ally': case 'trade': case 'nap': case 'pay':
+        return this.propose(g, pl, k, d.op, d.op === 'pay' ? { gold: D.tributeGold(g, pl) } : null, ui);
+      case 'demand': return this.propose(g, pl, k, 'demand', { gold: D.tributeGold(g, k) }, ui);
+    }
+    return undefined;
+  },
+  propose(g, pl, k, kind, terms, ui) {
+    const res = Diplomacy.propose(g, pl.id, k.id, kind, terms);
+    if (res.ok) {
+      this.answers[k.id] = { ok: true, text: k.name + ': «Согласны».', until: g.time + 30 };
+      ui.toast(k.name + ' соглашается', true);
+      this.sfx(kind === 'peace' || kind === 'ally' ? 'victory' : 'coin');
+      return undefined;
+    }
+    const why = res.why || 'Отказ';
+    this.answers[k.id] = { ok: false, text: why, until: g.time + 30 };
+    return why;
+  },
+  answerOffer(g, id, yes, ui) {
+    const o = g.dip.offers.find(x => x.id === id);
+    const err = Diplomacy.answer(g, id, yes);
+    if (err) return err;
+    if (o && yes) { ui.toast('Договор заключён', true); this.sfx(o.kind === 'call' ? 'horn' : 'done'); }
+    else this.sfx('click');
+    return undefined;
+  },
+
+  // ---------- запрос войны после приказа ----------
+  showAsk(g, d) {
+    const k = g.kingdom(d.owner);
+    if (!k || !this.ensureDom()) return;
+    this.ask = { army: d.army.id, owner: d.owner, target: d.target, until: performance.now() + 9000 };
+    const r = Diplomacy.rel(g, g.player.id, d.owner);
+    const block = Diplomacy.declareBlock(g, g.player.id, d.owner);
+    const name = `«${escapeHtml(k.name)}»`;
+    let h = `<div class="dp-ot">${Icons.crest(k, 30)}<span>`;
+    if (r && r.st === 'ally') h += `${name} — наш союзник. Разорвать союз и объявить войну?</span></div><div class="dp-acts"><button class="act dp-red" type="button" data-op="war">${Icons.svg('swords')}Разорвать союз и напасть</button>`;
+    else if (block) h += `С державой ${name} мир. ${escapeHtml(block)} — пока воевать нельзя.</span></div><div class="dp-acts">`;
+    else h += `С державой ${name} мир. Объявить войну?</span></div><div class="dp-acts"><button class="act dp-red" type="button" data-op="war">${Icons.svg('swords')}Объявить войну</button>`;
+    h += `<button class="act ghost" type="button" data-op="cancel">${block && !(r && r.st === 'ally') ? 'Понятно' : 'Отмена'}</button></div>`;
+    this.dom.ask.innerHTML = h;
+    this.dom.ask.hidden = false;
+  },
+  askAct(op) {
+    const ask = this.ask, g = typeof App !== 'undefined' ? App.game : null;
+    this.ask = null;
+    if (this.dom) this.dom.ask.hidden = true;
+    if (op !== 'war' || !ask || !g || !g.dip) return;
+    const pl = g.player, D = Diplomacy;
+    if (D.state(g, pl.id, ask.owner) === 'ally') D.breakAlliance(g, pl.id, ask.owner);
+    const err = D.declareWar(g, pl.id, ask.owner);
+    if (err) { App.ui.toast(err); this.sfx('error'); return; }
+    const a = g.army(ask.army);
+    if (a && a.owner === pl.id) {
+      const e2 = g.order(a, ask.target);
+      if (!e2) {
+        const t = ask.target, c = t.kind === 'city' ? g.city(t.id) : null, x = t.kind === 'army' ? g.army(t.id) : null;
+        if (c) App.renderer.marker = { x: c.x + 0.5, y: c.y + 0.5, t: 0, attack: true };
+        else if (x) App.renderer.marker = { x: x.x, y: x.y, t: 0, attack: true };
+      }
+    }
+    this.sfx('horn');
+    this.refreshPanel();
+  },
+
+  // ---------- плавающие элементы: кнопка в планке и карточки ----------
+  ensureDom() {
+    if (this.dom) return this.dom;
+    const kb = document.getElementById('kingdom-btn'), left = document.getElementById('left'), hud = document.getElementById('hud');
+    if (!kb || !left || !hud) return null;
+    kb.insertAdjacentHTML('afterend', '<button id="dip-btn" type="button" title="Дипломатия: войны, мир, союзы" hidden></button>');
+    left.insertAdjacentHTML('beforeend', '<div id="dip-offer" hidden></div>');
+    hud.insertAdjacentHTML('beforeend', '<div id="dip-ask" hidden></div>');
+    const dom = { btn: document.getElementById('dip-btn'), off: document.getElementById('dip-offer'), ask: document.getElementById('dip-ask'), offId: null, btnHtml: '' };
+    dom.btn.addEventListener('click', () => { this.sfx('click'); this.openTab(); });
+    dom.off.addEventListener('click', e => {
+      const b = e.target.closest('[data-op]');
+      if (!b) { this.openTab(); return; }
+      const g = App.game, err = this.answerOffer(g, +b.dataset.id, b.dataset.op === 'yes', App.ui);
+      if (err) { App.ui.toast(err); this.sfx('error'); }
+      this.sync(1);
+      this.refreshPanel();
+    });
+    dom.ask.addEventListener('click', e => { const b = e.target.closest('[data-op]'); if (b) this.askAct(b.dataset.op); });
+    this.dom = dom;
+    return dom;
+  },
+  // раз в четверть секунды: кнопка в планке, карточка предложения, срок запроса войны
+  sync(dt) {
+    this.syncT -= dt;
+    if (this.syncT > 0) return;
+    this.syncT = 0.25;
+    const dom = this.ensureDom();
+    if (!dom) return;
+    const g = typeof App !== 'undefined' ? App.game : null;
+    const on = !!(g && App.mode === 'game' && !g.opts.spectate && g.dip && g.winner === null);
+    if (!on) {
+      dom.btn.hidden = true; dom.off.hidden = true; dom.ask.hidden = true; this.ask = null; dom.offId = null;
+      return;
+    }
+    this.icons();
+    const pl = g.player, wars = Diplomacy.wars(g, pl.id);
+    const offers = g.dip.offers.filter(o => o.to === pl.id);
+    const bh = (wars ? Icons.svg('swords') + '<b>' + wars + '</b>' : Icons.svg('scroll')) + (offers.length ? '<i class="dot"></i>' : '');
+    if (bh !== dom.btnHtml) {
+      dom.btnHtml = bh;
+      dom.btn.innerHTML = bh;
+      dom.btn.className = wars ? 'war' : '';
+      dom.btn.title = wars ? 'Войн: ' + wars + '. Дипломатия' : 'Дипломатия: мир со всеми';
+    }
+    dom.btn.hidden = false;
+    // карточка предложения (на панели державы с вкладкой «Дипломатия» не нужна — там всё видно)
+    const inTab = App.ui.sel && App.ui.sel.kind === 'kingdom' && App.ui.kTab === 'dip';
+    const o = !inTab && offers[0];
+    if (o) {
+      if (dom.offId !== o.id) { dom.offId = o.id; dom.off.innerHTML = this.offerHtml(g, o, true); }
+      const left = dom.off.querySelector('.dp-left');
+      const t = fmtTime(Math.max(0, o.until - g.time));
+      if (left && left.textContent !== t) left.textContent = t;
+      dom.off.hidden = false;
+    } else if (!dom.off.hidden) { dom.off.hidden = true; dom.offId = null; }
+    if (this.ask && performance.now() > this.ask.until) { this.ask = null; dom.ask.hidden = true; }
+  },
+
+  // ---------- карта: граница войны и союза ----------
+  // Участки границ из контуров владений Renderer: тип 1 — война с игроком, 2 — война соперников между собой,
+  // 3 — союз с игроком. Пересобираются, только если сдвинулись границы или изменились отношения.
+  borderRuns(g, R) {
+    const B = R.borders, own = R.terrOwn;
+    if (!B || !own || !g.dip) return [];
+    const pid = g.player ? g.player.id : -1;
+    const key = R.terrKey + '|' + g.dip.v + '|' + pid;
+    if (key === this.runsKey && B === this.runsB) return this.runs;
+    this.runsKey = key; this.runsB = B;
+    const W = g.world.W, H = g.world.H, D = Diplomacy, runs = [];
+    for (const [k, t] of B) {
+      if (k < 0) continue;
+      for (const ch of t.chains) {
+        const P = ch.pts, N = ch.nrm, m = P.length / 2;
+        let cur = null;
+        const flush = () => { if (cur && cur.pts.length >= 6) runs.push(this.finishRun(cur)); cur = null; };
+        for (let i = 0; i < m; i++) {
+          const tx = Math.floor(P[i * 2] - N[i * 2] * 0.7), ty = Math.floor(P[i * 2 + 1] - N[i * 2 + 1] * 0.7);
+          const o = tx >= 0 && ty >= 0 && tx < W && ty < H ? own[ty * W + tx] : -99;
+          let type = 0;
+          if (o >= 0 && o !== k && k < o) {
+            const st = D.state(g, k, o);
+            if (st === 'war') type = k === pid || o === pid ? 1 : 2;
+            else if (st === 'ally' && (k === pid || o === pid)) type = 3;
+          }
+          if (type !== (cur ? cur.type : 0)) { flush(); if (type) cur = { type, pts: [] }; }
+          if (cur) cur.pts.push(P[i * 2], P[i * 2 + 1]);
+        }
+        flush();
+      }
+    }
+    this.runs = runs;
+    return runs;
+  },
+  // рамка участка и места значков (скрещённые мечи или кольца) через каждые 10 клеток
+  finishRun(r) {
+    const p = r.pts, box = [Infinity, Infinity, -Infinity, -Infinity], marks = [];
+    let len = 0;
+    for (let i = 0; i < p.length; i += 2) {
+      box[0] = Math.min(box[0], p[i]); box[1] = Math.min(box[1], p[i + 1]); box[2] = Math.max(box[2], p[i]); box[3] = Math.max(box[3], p[i + 1]);
+      if (i) len += Math.hypot(p[i] - p[i - 2], p[i + 1] - p[i - 1]);
+    }
+    if (r.type !== 2 && len >= 1.5) {
+      const step = 10;
+      let next = len < step ? len / 2 : step / 2, acc = 0;
+      for (let i = 2; i < p.length; i += 2) {
+        const d = Math.hypot(p[i] - p[i - 2], p[i + 1] - p[i - 1]);
+        while (acc + d >= next) {
+          const f = (next - acc) / d;
+          marks.push([p[i - 2] + (p[i] - p[i - 2]) * f, p[i - 1] + (p[i + 1] - p[i - 1]) * f]);
+          next += step;
+        }
+        acc += d;
+      }
+    }
+    return { type: r.type, pts: p, box, marks };
+  },
+  drawMap(ctx, R, z, tl, br) {
+    const g = R.g;
+    if (!g || !g.dip) return;
+    const runs = this.borderRuns(g, R);
+    if (!runs.length) return;
+    const x0 = tl.x - 1, y0 = tl.y - 1, x1 = br.x + 1, y1 = br.y + 1;
+    const paths = [null, null, null];
+    for (const r of runs) {
+      const b = r.box;
+      if (b[0] > x1 || b[2] < x0 || b[1] > y1 || b[3] < y0) continue;
+      const p = paths[r.type - 1] || (paths[r.type - 1] = new Path2D());
+      p.moveTo(r.pts[0], r.pts[1]);
+      for (let i = 2; i < r.pts.length; i += 2) p.lineTo(r.pts[i], r.pts[i + 1]);
+    }
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    if (paths[1]) {
+      ctx.setLineDash([4 / z, 5 / z]);
+      ctx.strokeStyle = 'rgba(150,28,18,0.6)'; ctx.lineWidth = 1.8 / z;
+      ctx.stroke(paths[1]);
+    }
+    if (paths[0]) {
+      ctx.setLineDash([]);
+      ctx.strokeStyle = 'rgba(255,238,214,0.55)'; ctx.lineWidth = 5.5 / z;
+      ctx.stroke(paths[0]);
+      ctx.setLineDash([8 / z, 6 / z]);
+      ctx.strokeStyle = '#b5231a'; ctx.lineWidth = 3.2 / z;
+      ctx.stroke(paths[0]);
+    }
+    if (paths[2]) {
+      ctx.setLineDash([0.01, 6 / z]);
+      ctx.strokeStyle = '#e9b52f'; ctx.lineWidth = 3.4 / z;
+      ctx.stroke(paths[2]);
+    }
+    ctx.setLineDash([]);
+  },
+  drawScreen(ctx, R, z, tl, br, dt) {
+    this.sync(dt);
+    const g = R.g;
+    if (!g || !g.dip || (typeof App !== 'undefined' && App.mode !== 'game')) return;
+    this.icons();
+    const runs = this.borderRuns(g, R);
+    const s = clamp(z * 0.45, 13, 20);
+    for (const r of runs) {
+      if (r.type === 2 || !r.marks.length) continue;
+      const b = r.box;
+      if (b[0] > br.x + 1 || b[2] < tl.x - 1 || b[1] > br.y + 1 || b[3] < tl.y - 1) continue;
+      for (const m of r.marks) {
+        if (m[0] < tl.x - 1 || m[0] > br.x + 1 || m[1] < tl.y - 1 || m[1] > br.y + 1 || !g.isExplored(m[0], m[1])) continue;
+        this.badge(ctx, R.toScreen(m[0], m[1]), s, r.type === 1);
+      }
+    }
+    // союзные города при крупном масштабе — с кольцами союза
+    if (z < 14) return;
+    const pid = g.player.id;
+    for (const c of g.cities) {
+      if (c.owner < 0 || c.owner === pid || c.x < tl.x - 2 || c.x > br.x + 1 || c.y < tl.y - 2 || c.y > br.y + 1) continue;
+      if (Diplomacy.state(g, pid, c.owner) !== 'ally' || !g.isExplored(c.x + 0.5, c.y + 0.5)) continue;
+      const rad = R.cityRadius ? R.cityRadius(c) : 0.8;
+      this.badge(ctx, R.toScreen(c.x + 0.5 + rad * 0.95, c.y + 0.5 - rad * 0.95), s * 0.9, false);
+    }
+  },
+  badge(ctx, p, s, war) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, s / 2 + 1.5, 0, TAU);
+    ctx.fillStyle = war ? '#8e1d12' : '#b98a1c';
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#f6ecd2';
+    ctx.stroke();
+    Icons.draw(ctx, war ? 'swords' : 'dipally', p.x, p.y, s * 0.72, '#fff3e0');
+  },
+};
+
+if (DipView) {
+  UIExt.kingdomTabs.push({ id: 'dip', title: 'Дипломатия', html: (g, pl, ui) => DipView.tabHtml(g, pl, ui) });
+  UIExt.actions.dip = (d, ui) => DipView.act(d, ui);
+  RenderExt.map.push((ctx, R, z, tl, br) => DipView.drawMap(ctx, R, z, tl, br));
+  RenderExt.screen.push((ctx, R, z, tl, br, dt) => DipView.drawScreen(ctx, R, z, tl, br, dt));
+  document.head.insertAdjacentHTML('beforeend', '<style id="dip-css">' + [
+    // старая вкладка «Соперники» устарела: её заменяет «Дипломатия»
+    '#panel-body .tabs button[data-act="ktab"][data-v="rivals"]{display:none}',
+    '.dp-list{display:flex;flex-direction:column;gap:6px;margin-top:2px}',
+    '.dp-k{border:1px solid var(--line);border-radius:10px;background:rgba(255,250,235,.6);overflow:hidden}',
+    '.dp-k.war{border-color:rgba(166,58,40,.6);background:rgba(166,58,40,.07)}',
+    '.dp-k.ally{border-color:#c8962e;background:rgba(215,169,68,.14)}',
+    '.dp-k.dead{opacity:.55}',
+    '.dp-row{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;padding:6px 10px;min-height:44px;text-align:left}',
+    '.dp-row .nm{flex:1;min-width:0;font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.dp-st{flex:none;font-size:12px;font-weight:700;padding:2px 7px;border-radius:10px;text-transform:uppercase;letter-spacing:.04em;background:rgba(120,90,50,.15);color:var(--ink-soft)}',
+    '.dp-st.war{background:#a63a28;color:#fff1e0}',
+    '.dp-st.peace{background:rgba(79,122,44,.16);color:#3c5e20}',
+    '.dp-st.truce{background:rgba(79,122,44,.1);color:#3c5e20;border:1px dashed rgba(79,122,44,.5)}',
+    '.dp-st.ally{background:#d7a944;color:#2a1b0d}',
+    '.dp-op{flex:none;font-weight:700;font-variant-numeric:tabular-nums;min-width:30px;text-align:right}',
+    '.dp-op.neg{color:var(--red)}.dp-op.pos{color:var(--green)}',
+    '.dp-chev{flex:none;width:8px;height:8px;border-right:2px solid var(--ink-soft);border-bottom:2px solid var(--ink-soft);transform:rotate(45deg);margin:0 4px 4px 2px}',
+    '.dp-k.open .dp-chev{transform:rotate(-135deg);margin:4px 4px 0 2px}',
+    '.dp-body{padding:0 10px 10px;font-size:14px}',
+    '.dp-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;margin-top:6px}',
+    '.dp-line .k{color:var(--ink-soft);font-size:13px}',
+    '.dp-chip{display:inline-flex;align-items:center;gap:3px;padding:1px 8px;border-radius:12px;background:rgba(120,90,50,.12);font-size:13px}',
+    '.dp-score{margin-top:4px}',
+    '.dp-bar{position:relative;height:10px;margin-top:5px;border-radius:5px;background:rgba(60,40,20,.15);border:1px solid rgba(60,40,20,.3);overflow:hidden}',
+    '.dp-bar i{position:absolute;top:0;bottom:0}.dp-bar i.pos{background:#6b9a3c}.dp-bar i.neg{background:#b4482f}',
+    '.dp-bar b{position:absolute;left:50%;top:0;bottom:0;width:2px;margin-left:-1px;background:#2a1b0d}',
+    '.dp-acts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}',
+    '.dp-acts .act{flex:1 1 auto;min-height:38px;padding:6px 10px;font-size:14px}',
+    '.dp-acts .act .ico{margin-right:4px}',
+    '.dp-q{flex-basis:100%;font-weight:700;color:#7a2a18}',
+    '.act.dp-red{background:linear-gradient(#d0644c,#9c3420);color:#fff3e6;border-color:#5e1a0e;box-shadow:inset 0 1px 0 rgba(255,220,200,.4),0 2px 0 #5e1a0e}',
+    '.act.dp-red:disabled{background:rgba(166,58,40,.07);color:#8a2a18;border-color:rgba(166,58,40,.5);box-shadow:none}',
+    '.dp-terms{display:flex;flex-direction:column;gap:5px;margin-top:8px;padding:8px;border-radius:8px;background:rgba(255,250,235,.7);border:1px dashed var(--line)}',
+    '.dp-terms .act{text-align:left;white-space:normal;min-height:36px;font-size:14px}',
+    '.dp-terms .tip{margin-top:2px}',
+    '.dp-ans{margin-top:8px;padding:6px 9px;border-radius:8px;font-size:14px;font-weight:700}',
+    '.dp-ans.no{background:rgba(166,58,40,.1);color:#7a2a18}.dp-ans.ok{background:rgba(79,122,44,.14);color:#2f4d18}',
+    '.dp-offer{border-color:#c8962e;background:linear-gradient(180deg,#fff6db,#f5e5bb)}',
+    '.dp-offer.bad{border-color:rgba(166,58,40,.6);background:linear-gradient(180deg,#fbe9dc,#f1d6c0)}',
+    '.dp-ot{display:flex;gap:8px;align-items:center;font-size:14px;line-height:1.25}',
+    '.dp-offer .dp-acts{margin-top:6px}.dp-offer .dp-acts .act{flex:1 1 0}',
+    '.dp-timer{flex:none;display:inline-flex;align-items:center;gap:2px;color:var(--ink-soft);font-size:13px;font-variant-numeric:tabular-nums}',
+    '.dp-offer .tip{margin-top:4px}',
+    '#dip-offer{margin:0;padding:7px 9px;border-width:2px;box-shadow:0 6px 20px rgba(0,0,0,.45);cursor:pointer}',
+    '#dip-offer .dp-offer{margin:0;padding:0;border:0;background:none}',
+    '#dip-offer .act{min-height:36px;padding:5px 8px}',
+    '#dip-offer .tip{font-size:12px}',
+    '#dip-offer{background:linear-gradient(180deg,#fff6db,#f5e5bb);border:2px solid #c8962e;border-radius:10px}',
+    '#dip-ask{position:absolute;left:50%;top:calc(var(--top) + 52px);transform:translateX(-50%);width:420px;max-width:92vw;background:var(--paper);border:2px solid #a63a28;border-radius:10px;padding:9px 12px;box-shadow:0 8px 26px rgba(0,0,0,.5);z-index:5}',
+    '#dip-btn{display:flex;align-items:center;gap:4px;flex:none;background:rgba(0,0,0,.25);border:1px solid var(--wood-line);border-radius:7px;color:#f3e3bd;padding:3px 8px;min-height:32px;font-weight:700}',
+    '#dip-btn.war{background:rgba(150,36,22,.9);border-color:#e0806a;color:#fff1e0}',
+    '#dip-btn .dot{width:8px;height:8px;border-radius:50%;background:var(--gold-hi);box-shadow:0 0 0 2px rgba(243,213,138,.4)}',
+    '#dip-btn .ico{width:18px;height:18px}',
+  ].join('') + '</style>');
+}
