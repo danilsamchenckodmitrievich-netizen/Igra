@@ -3,6 +3,7 @@
 
 const SAVE_KEY = 'kc.save.v1';
 const PREFS_KEY = 'kc.prefs';
+const PORTRAIT_KEY = 'kc.portrait';
 
 function store(key, val) {
   try { if (val === null) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify(val)); return true; } catch (e) { return false; }
@@ -35,6 +36,10 @@ const App = {
     Sfx.setMuted(!!p.muted);
     this.bindMenus();
     window.addEventListener('resize', () => this.onResize());
+    $('rotate-ok').addEventListener('click', () => {
+      try { localStorage.setItem(PORTRAIT_KEY, '1'); } catch (e) { /* хранилище недоступно */ }
+      this.checkOrientation();
+    });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && this.mode === 'game') { this.save(); if (this.speed > 0) this.togglePause(); }
     });
@@ -223,7 +228,16 @@ const App = {
     return false;
   },
 
+  // Игра рассчитана на горизонтальный экран: на телефоне в вертикальном положении просим повернуть его.
+  checkOrientation() {
+    const touch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const portrait = window.innerHeight > window.innerWidth && window.innerWidth < 700;
+    let agreed = false;
+    try { agreed = localStorage.getItem(PORTRAIT_KEY) === '1'; } catch (e) { agreed = false; }
+    $('rotate').hidden = !(touch && portrait) || agreed;
+  },
   onResize() {
+    this.checkOrientation();
     this.renderer.resize();
     if (this.game) this.renderer.clampCam();
   },

@@ -320,3 +320,24 @@ table.t tr.click:hover td { background: rgba(215, 169, 68, 0.15); }
 @media (prefers-reduced-motion: reduce) {
   .msg, #toast { transition: none; }
 }
+
+/* Подсказка повернуть телефон: игра рассчитана на горизонтальный экран. */
+#rotate {
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 90; display: grid; place-items: center;
+  padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
+  background: radial-gradient(ellipse at 50% 40%, rgba(43, 30, 18, 0.92), rgba(20, 12, 5, 0.97));
+}
+.rotate-sheet { text-align: center; }
+.rotate-sheet h2 { margin: 6px 0 8px; }
+.rotate-sheet .btn { margin: 0 auto; }
+.rotate-sheet p { margin: 0 0 16px; color: var(--ink-soft); line-height: 1.45; }
+.rotate-phone { width: 120px; height: 96px; }
+.rotate-phone .rp-arc, .rotate-phone .rp-arrow { fill: none; stroke: var(--gold); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.rotate-phone .rp-device rect { fill: var(--paper-2); stroke: var(--ink); stroke-width: 4; }
+.rotate-phone .rp-device circle { fill: var(--ink); }
+.rotate-phone .rp-device { transform-origin: 76px 49px; animation: rp-turn 2.4s ease-in-out infinite; }
+@keyframes rp-turn {
+  0%, 20% { transform: rotate(-90deg); }
+  55%, 100% { transform: rotate(0deg); }
+}
+@media (prefers-reduced-motion: reduce) { .rotate-phone .rp-device { animation: none; } }
