@@ -34,7 +34,7 @@ const TAX_RATES = [
 
 // Знания: три ветви по три ступени. Изучаются по одному, оплачиваются золотом по ходу (rate — золота в минуту).
 const TECH_BRANCHES = [['eco', 'Хозяйство'], ['war', 'Война'], ['state', 'Государство']];
-const TECH_TIERS = [null, { time: 80, rate: 45 }, { time: 110, rate: 60 }, { time: 150, rate: 75 }];
+const TECH_TIERS = [null, { time: 100, rate: 45 }, { time: 150, rate: 60 }, { time: 210, rate: 75 }];
 const TECHS = {
   plough: { branch: 'eco', tier: 1, name: 'Тяжёлый плуг', icon: 'farm', need: [], desc: 'Фермы дают на 25% больше еды.' },
   mill: { branch: 'eco', tier: 2, name: 'Водяная мельница', icon: 'lumber', need: ['plough'], desc: 'Лесопилки +25% дерева; зимой поля теряют меньше урожая.' },
@@ -685,3 +685,347 @@ Mods.add({
     aiGarrison(g, v, c) { return v + Society.aiGarrison(g, c); },
   },
 });
+
+// ---------- интерфейс и отрисовка (только в браузере) ----------
+if (typeof document !== 'undefined') {
+  // Значки погоды (контурные, 24×24).
+  const WX_ICONS = {
+    clear: '<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+    frost: '<path d="M12 2.5v19M3.8 7.2l16.4 9.6M3.8 16.8l16.4-9.6M9.5 3.8L12 6.3l2.5-2.5M9.5 20.2L12 17.7l2.5 2.5"/>',
+    cloud: '<path d="M7 17.5h10.5a3.8 3.8 0 0 0 .4-7.6A5.6 5.6 0 0 0 7.2 9.2A4.2 4.2 0 0 0 7 17.5z"/>',
+    rain: '<path d="M7 14h10.5a3.5 3.5 0 0 0 .4-7A5.2 5.2 0 0 0 7.8 6.2A3.9 3.9 0 0 0 7 14z"/><path d="M8.5 16.5l-1.2 3.5M12.5 16.5l-1.2 3.5M16.5 16.5l-1.2 3.5"/>',
+    storm: '<path d="M7 13.5h10.5a3.5 3.5 0 0 0 .4-7A5.2 5.2 0 0 0 7.8 5.7A3.9 3.9 0 0 0 7 13.5z"/><path d="M12.8 13.5l-2.6 4.2h3l-2.2 4"/><path d="M7.8 16l-1 2.8M17.2 16l-1 2.8"/>',
+    fog: '<path d="M3.5 8.5c2.5-1.6 5-1.6 7.5 0s5 1.6 7.5 0M5.5 12.5c2.5-1.6 5-1.6 7.5 0s5 1.6 7.5 0M3.5 16.5c2.5-1.6 5-1.6 7.5 0s5 1.6 7.5 0"/>',
+    snow: '<path d="M7 12.5h10.5a3.5 3.5 0 0 0 .4-7A5.2 5.2 0 0 0 7.8 4.7A3.9 3.9 0 0 0 7 12.5z"/><path d="M8 16v.1M12 15v.1M16 16v.1M10 19.5v.1M14 19.5v.1" stroke-width="2.6"/>',
+    drought: '<circle cx="12" cy="9.5" r="3.6"/><path d="M12 2.5v2M5 9.5h2M17 9.5h2M7.1 4.6l1.4 1.4M16.9 4.6l-1.4 1.4M3 19h18M6 19l2-2.5 2 1.5 2-2.5 2 2 2-1.5 2 3"/>',
+  };
+  const wxSvg = (kind, cls) => `<svg class="ico wx-ico ${cls || ''}" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${WX_ICONS[kind] || WX_ICONS.cloud}</svg>`;
+  const num = v => String(Math.round(v * 100) / 100).replace('.', ',');
+  const moodCls = h => (h < SOCIETY.unrest ? 'low' : h < 50 ? 'mid' : 'hi');
+  const sfx = name => { if (typeof Sfx !== 'undefined') Sfx.play(name); };
+
+  // Стили модуля: свои классы soc-*, чтобы не трогать общий game.css.
+  const css = document.createElement('style');
+  css.id = 'society-css';
+  css.textContent = `
+#weather { display: flex; align-items: center; gap: 4px; padding: 2px 7px; min-height: 30px; border-radius: 6px; flex: none;
+  background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(167, 135, 86, 0.35); color: #f3e3bd; font-size: 13px; white-space: nowrap; }
+#weather .wx-ico { width: 20px; height: 20px; }
+#weather.k-clear .wx-ico { color: #f3d58a; } #weather.k-frost .wx-ico, #weather.k-snow .wx-ico { color: #dfeaff; }
+#weather.k-rain .wx-ico { color: #9fc3e8; } #weather.k-storm .wx-ico { color: #c4b8f0; } #weather.k-fog .wx-ico { color: #d6d6cf; }
+#weather.k-drought .wx-ico { color: #f0a54a; }
+@media (max-width: 900px), (max-height: 520px) { #weather span { display: none; } #weather { padding: 2px 4px; min-height: 28px; } }
+.soc-row { gap: 6px; }
+.soc-mood { cursor: pointer; font: inherit; font-size: 14px; min-height: 32px; transition: background-color 0.15s; }
+.soc-mood .soc-bar { display: inline-block; width: 46px; height: 7px; border-radius: 4px; background: rgba(60, 40, 20, 0.16); overflow: hidden; box-shadow: inset 0 1px 1px rgba(42, 27, 13, 0.25); }
+.soc-mood .soc-bar i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #6d8f3c, #a5c467); }
+.soc-mood.mid .soc-bar i { background: linear-gradient(90deg, #b8862b, #e9c264); }
+.soc-mood.low .soc-bar i { background: linear-gradient(90deg, #7d2b1d, #c9552f); }
+.soc-mood.low b, .soc-mood.low .ico { color: var(--red); }
+.soc-mood.hi .ico { color: var(--green); }
+.soc-mood .chev { width: 7px; height: 7px; border-right: 2px solid var(--ink-soft); border-bottom: 2px solid var(--ink-soft); transform: translateY(-2px) rotate(45deg); margin-left: 2px; transition: transform 0.2s; }
+.soc-mood.on { background: rgba(215, 169, 68, 0.3); border-color: #8a6420; }
+.soc-mood.on .chev { transform: translateY(1px) rotate(-135deg); }
+.chip.soc-bad { border-color: rgba(166, 58, 40, 0.6); color: #8a2a18; background: rgba(166, 58, 40, 0.08); font-weight: 700; }
+.chip.soc-wx { color: var(--ink-soft); }
+.soc-eff { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 6px; font-size: 13px; color: var(--ink-soft); }
+.soc-eff b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.box.soc-merc { margin: 8px 0 0; background: linear-gradient(180deg, #fff6db, #f5e5bb); border-color: #c8962e; }
+.box.soc-merc .btnrow { margin-top: 6px; }
+.soc-tax { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.soc-tax button { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 54px; padding: 6px 4px; border-radius: 9px;
+  border: 1px solid var(--line); background: rgba(255, 250, 235, 0.6); }
+.soc-tax button b { font-family: var(--font-head); font-weight: 400; font-size: 17px; }
+.soc-tax button small { font-size: 12px; color: var(--ink-soft); line-height: 1.2; text-align: center; }
+.soc-tax button.on { background: linear-gradient(#f6dc96, #d9ae52); border-color: #8a6420; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55); }
+.soc-tax button.on small { color: #4a3210; }
+.soc-num { display: inline-block; min-width: 34px; padding: 1px 6px; border-radius: 10px; text-align: center; font-weight: 700; }
+.soc-num.hi { background: rgba(79, 122, 44, 0.15); color: #3d5f1c; }
+.soc-num.mid { background: rgba(215, 169, 68, 0.22); color: #6b4a0e; }
+.soc-num.low { background: rgba(166, 58, 40, 0.15); color: #8a2a18; }
+.soc-sum { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 2px; font-size: 14px; }
+.soc-cur { display: flex; flex-direction: column; gap: 6px; }
+.soc-cur .row2 { font-size: 14px; }
+.soc-tree { margin-bottom: 4px; }
+.soc-tier { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; position: relative; }
+.soc-tier.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.soc-tier + .soc-tier { margin-top: 12px; }
+.soc-tier + .soc-tier::before { content: ''; position: absolute; left: 50%; top: -11px; width: 2px; height: 9px; margin-left: -1px; background: var(--line); }
+.soc-tech { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 7px 8px; border-radius: 10px; border: 1px solid #b99a66;
+  background: linear-gradient(180deg, rgba(255, 252, 242, 0.95), rgba(249, 238, 210, 0.9)); box-shadow: 0 1px 3px rgba(60, 40, 20, 0.12); }
+.soc-tech .st-h { display: flex; align-items: center; gap: 5px; }
+.soc-tech .st-h b { font-family: var(--font-head); font-weight: 400; font-size: 17px; line-height: 1.05; }
+.soc-tech p { margin: 0; font-size: 13px; color: var(--ink-soft); line-height: 1.25; }
+.soc-tech .st-f { margin-top: auto; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.soc-tech .st-c { display: flex; flex-wrap: wrap; gap: 2px 8px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.soc-tech .act { min-height: 36px; padding: 5px 8px; font-size: 14px; width: 100%; }
+.soc-tech.st-done { background: linear-gradient(180deg, rgba(236, 244, 222, 0.95), rgba(220, 234, 200, 0.9)); border-color: #6d8f3c; }
+.soc-tech.st-done .st-f { color: var(--green); font-weight: 700; flex-direction: row; align-items: center; }
+.soc-tech.st-cur { border-color: #c8962e; background: linear-gradient(180deg, #fff6db, #f5e2b0); box-shadow: 0 0 0 2px rgba(215, 169, 68, 0.4); }
+.soc-tech.st-locked { opacity: 0.66; }
+.soc-tech.st-locked .st-f { flex-direction: row; align-items: center; gap: 4px; }
+`;
+  document.head.appendChild(css);
+
+  // Подписи причин довольства: самая тяжёлая беда города.
+  const worst = (g, c) => {
+    const parts = [];
+    Society.mood(g, c, parts);
+    let w = null;
+    for (const p of parts) if (p[1] < 0 && (!w || p[1] < w[1])) w = p;
+    return w ? w[0] + ' ' + fmtSigned(w[1]) : '—';
+  };
+
+  // ---------- шапка города: довольство, беды, наёмники ----------
+  UIExt.cityHeader.push((g, c, mine, ui) => {
+    const k = g.kingdom(c.owner);
+    if (!k || k.bandit || !g.soc) return '';
+    const s = Society.city(c), h = Math.round(s.happy), cls = moodCls(s.happy);
+    const seen = mine || g.isVisible(c.x + 0.5, c.y + 0.5);
+    let badges = '';
+    if (s.happy < SOCIETY.unrest) badges += `<span class="chip soc-bad" title="Горожане на грани мятежа">${Icons.svg('swords')}Волнения</span>`;
+    if (s.plague > 0) badges += `<span class="chip soc-bad" title="Мор: жители умирают, рост остановился">${Icons.svg('skull')}Мор</span>`;
+    const wx = Society.wx(g, c.x + 0.5, c.y + 0.5);
+    if (wx) { const W = WEATHER[wx.kind]; badges += `<span class="chip soc-wx" title="${W.name}: ${W.tip}">${wxSvg(wx.kind)}${W.name}</span>`; }
+    if (!mine) {
+      if (!seen) return badges ? `<div class="ch-row soc-row">${badges}</div>` : '';
+      return `<div class="ch-row soc-row"><span class="chip soc-mood ${cls}" title="Довольство горожан">${Icons.svg('heart')}<span>Довольство</span><b>${h}</b></span>${badges}</div>`;
+    }
+    const open = !!ui.socOpen;
+    let out = `<div class="ch-row soc-row"><button type="button" class="chip soc-mood ${cls}${open ? ' on' : ''}" data-act="soc-mood" aria-expanded="${open}" title="Довольство горожан: от него зависят доход, рост и порядок">` +
+      `${Icons.svg('heart')}<span>Довольство</span><b>${h}</b><span class="soc-bar"><i style="width:${h}%"></i></span><i class="chev"></i></button>${badges}</div>`;
+    if (open) {
+      const parts = [], target = Society.mood(g, c, parts);
+      const arrow = Math.abs(target - s.happy) < 1 ? '' : target > s.happy ? ' ↑ растёт к ' + Math.round(target) : ' ↓ падает к ' + Math.round(target);
+      out += `<div class="infl-d soc-d"><div class="infl-t">${Icons.svg('heart')}<b>Довольство ${h} из 100</b><span class="muted">${arrow}</span></div>`;
+      out += '<div class="infl-parts">' + parts.map(([n, v]) => `<span class="ip${v < 0 ? ' neg' : ''}">${escapeHtml(n)} <b>${fmtSigned(v)}</b></span>`).join('') + '</div>';
+      out += `<div class="soc-eff"><span>Доход <b>×${num(Society.incomeMult(s.happy))}</b></span><span>Рост <b>×${num(s.plague > 0 ? 0 : Society.growthMult(s.happy))}</b></span>` +
+        `<span>Земли <b>${fmtSigned(s.happy < 40 ? -(40 - s.happy) / 40 * 1.2 : s.happy > 75 ? (s.happy - 75) / 25 * 0.4 : 0)}</b> кл.</span></div>`;
+      out += `<p class="tip">Ниже ${SOCIETY.unrest} — волнения, а если они затянутся, мятеж: город может отложиться. Помогают низкие налоги, сытость, гарнизон, рынок и ратуша.</p></div>`;
+    }
+    const o = Society.offerAt(g, c);
+    const ma = o && g.army(o.army);
+    if (ma) {
+      const pl = g.player, lack = pl.res.gold < o.price;
+      out += `<div class="box soc-merc" data-key="merc"><div class="box-h"><h4>${Icons.svg('coin')} Наёмники у стен</h4><span class="muted">уйдут через ${fmtTime(o.until - g.time)}</span></div>` +
+        ui.unitsHtml(ma.units) +
+        `<div class="btnrow"><button class="act" type="button" data-act="soc-hire" data-id="${o.id}"${lack ? ' disabled' : ''}>${Icons.svg('coin')}Нанять за ${o.price} золота</button></div>` +
+        '<p class="tip">Отряд сразу станет вашей армией, жители города не убудут. Если отказать, наёмники уйдут — а то и примутся грабить округу.</p></div>';
+    }
+    return out;
+  });
+
+  // ---------- вкладка «Порядок» ----------
+  UIExt.kingdomTabs.push({
+    id: 'order', title: 'Порядок',
+    html(g, pl) {
+      const ks = Society.realm(pl);
+      let h = '<div class="pane" data-key="k-order"><h5 class="sec">Налоги</h5><div class="soc-tax">';
+      TAX_RATES.forEach((t, i) => {
+        h += `<button type="button" class="${ks.tax === i ? 'on' : ''}" data-act="soc-tax" data-v="${i}"><b>${t.name}</b>` +
+          `<small>подати ×${num(t.gold)}<br>довольство ${t.happy ? fmtSigned(t.happy) : '±0'}</small></button>`;
+      });
+      const cs = g.citiesOf(pl.id);
+      let tax = 0;
+      for (const c of cs) tax += c.pop * ECON.tax * (1 + BUILDINGS.market.taxBonus * (c.buildings.market || 0));
+      tax *= TAX_RATES[ks.tax].gold * (ks.done.treasury ? 1.15 : 1);
+      h += `</div><p class="tip">Подати с жителей сейчас — около ${fmtInt(tax)} золота в минуту${ks.done.treasury ? ' (с казначейством)' : ''}. Высокие налоги быстро наполняют казну, но злят горожан.</p>`;
+      h += '<h5 class="sec">Города</h5>';
+      if (!cs.length) h += '<p class="tip">Городов нет.</p>';
+      else {
+        let sum = 0, unrest = 0;
+        for (const c of cs) { sum += Society.city(c).happy; if (Society.city(c).happy < SOCIETY.unrest) unrest++; }
+        h += `<div class="soc-sum"><span>Среднее довольство <b>${Math.round(sum / cs.length)}</b></span><span>Волнения: <b>${unrest ? unrest + ' ' + plural(unrest, 'город', 'города', 'городов') : 'нет'}</b></span></div>`;
+        h += '<table class="t"><thead><tr><th>Город</th><th class="num">Дов.</th><th>Главная беда</th></tr></thead><tbody>';
+        const list = cs.slice().sort((a, b) => a.soc.happy - b.soc.happy);
+        for (const c of list) {
+          const s = Society.city(c);
+          h += `<tr class="click" data-act="selcity" data-id="${c.id}"><td>${escapeHtml(c.name)}${c.isCapital ? ' ★' : ''}</td>` +
+            `<td class="num"><span class="soc-num ${moodCls(s.happy)}">${Math.round(s.happy)}</span></td><td>${s.plague > 0 ? 'мор' : escapeHtml(worst(g, c))}</td></tr>`;
+        }
+        h += '</tbody></table>';
+      }
+      const offers = g.soc.offers.filter(o => { const c = g.city(o.city); return c && c.owner === pl.id && g.army(o.army); });
+      if (offers.length) {
+        h += '<h5 class="sec">Наёмники</h5>';
+        for (const o of offers) {
+          const c = g.city(o.city), a = g.army(o.army);
+          h += `<div class="box soc-merc" data-key="merc-${o.id}"><div class="box-h"><h4>${Icons.svg('coin')} У города ${escapeHtml(c.name)}</h4><span class="muted">${fmtTime(o.until - g.time)}</span></div>` +
+            `<div class="units">${UNIT_ORDER.filter(u => a.units[u]).map(u => `<span class="unit">${Icons.svg(u)}${UNITS[u].short} <b>${a.units[u]}</b></span>`).join('')}</div>` +
+            `<div class="btnrow"><button class="act" type="button" data-act="soc-hire" data-id="${o.id}"${pl.res.gold < o.price ? ' disabled' : ''}>Нанять за ${o.price} золота</button></div></div>`;
+        }
+      }
+      h += `<p class="tip">Довольство растёт от низких налогов, сытости, гарнизона, рынка и знаний; падает от голода, осады, врагов на землях, мора и недавнего захвата. Недовольные платят меньше и плодятся медленнее, а их земли сжимаются. Ниже ${SOCIETY.unrest} — волнения, затем мятеж.</p></div>`;
+      return h;
+    },
+  });
+
+  // ---------- вкладка «Знания» ----------
+  UIExt.kingdomTabs.push({
+    id: 'tech', title: 'Знания',
+    html(g, pl) {
+      const ks = Society.realm(pl), speed = Society.techSpeed(pl);
+      let h = '<div class="pane" data-key="k-tech">';
+      if (ks.cur) {
+        const T = TECHS[ks.cur], c = Society.techCost(ks.cur), part = ks.part[ks.cur] || 0, paused = pl.res.gold < RESEARCH_MIN_GOLD;
+        h += `<div class="box queue soc-cur" data-key="tcur"><div class="box-h"><h4>${Icons.svg('scroll')} Изучаем: ${T.name}</h4><span class="muted">${paused ? 'стоит: казна пуста' : 'ещё ' + fmtTime((c.time - part) / speed)}</span></div>` +
+          `<div class="progress anim"><i style="width:${(part / c.time * 100).toFixed(1)}%"></i></div>` +
+          `<div class="row2"><span class="muted">Расход: ${c.rate} золота в минуту${speed > 1 ? ' · письменность ускоряет' : ''}</span><button class="act ghost" type="button" data-act="soc-stop">Приостановить</button></div></div>`;
+      } else h += '<p class="tip" style="margin:0 0 8px">Выберите знание. Изучается одно за раз; золото уходит понемногу, пока идёт изучение, а при пустой казне оно стоит. Начатое не пропадает.</p>';
+      for (const [br, title] of TECH_BRANCHES) {
+        const ids = TECH_IDS.filter(id => TECHS[id].branch === br);
+        h += `<h5 class="sec">${title}</h5><div class="soc-tree">`;
+        for (let tier = 1; tier < TECH_TIERS.length; tier++) {
+          const row = ids.filter(id => TECHS[id].tier === tier);
+          if (!row.length) continue;
+          h += `<div class="soc-tier${row.length > 1 ? ' two' : ''}">`;
+          for (const id of row) h += techCard(g, pl, id, speed);
+          h += '</div>';
+        }
+        h += '</div>';
+      }
+      return h + '</div>';
+    },
+  });
+  function techCard(g, pl, id, speed) {
+    const T = TECHS[id], st = Society.techState(pl, id), c = Society.techCost(id), part = pl.soc.part[id] || 0;
+    let f;
+    if (st === 'done') f = `${Icons.svg('check')}Изучено`;
+    else if (st === 'cur') f = `<div class="progress anim"><i style="width:${(part / c.time * 100).toFixed(1)}%"></i></div><span class="st-c">${Icons.svg('hourglass')}${fmtTime((c.time - part) / speed)} · ${c.rate} зол./мин</span>`;
+    else if (st === 'locked') f = `${Icons.svg('lock')}<span>Нужно: ${T.need.filter(n => !pl.soc.done[n]).map(n => TECHS[n].name).join(', ')}</span>`;
+    else {
+      f = `<span class="st-c"><span>${Icons.svg('hourglass')}${fmtDur(c.time / speed)}</span><span>${Icons.svg('gold')}${c.rate}/мин, всего ${c.gold}</span></span>` +
+        `<button class="act" type="button" data-act="soc-research" data-id="${id}">${Icons.svg('scroll')}${part ? 'Продолжить (' + Math.round(part / c.time * 100) + '%)' : 'Изучать'}</button>`;
+    }
+    return `<div class="soc-tech st-${st}" data-key="t-${id}"><div class="st-h">${Icons.svg(T.icon)}<b>${T.name}</b></div><p>${T.desc}</p><div class="st-f">${f}</div></div>`;
+  }
+
+  // ---------- кнопки ----------
+  UIExt.actions['soc-mood'] = (d, ui) => { ui.socOpen = !ui.socOpen; };
+  UIExt.actions['soc-tax'] = (d, ui) => { Society.realm(ui.g.player).tax = clamp(+d.v | 0, 0, TAX_RATES.length - 1); sfx('coin'); };
+  UIExt.actions['soc-research'] = (d, ui) => {
+    const err = Society.startResearch(ui.g, ui.g.player, d.id);
+    if (!err) sfx('build');
+    return err;
+  };
+  UIExt.actions['soc-stop'] = (d, ui) => { Society.stopResearch(ui.g, ui.g.player); sfx('click'); };
+  UIExt.actions['soc-hire'] = (d, ui) => {
+    const g = ui.g, o = g.soc.offers.find(x => x.id === +d.id);
+    if (!o) return 'Наёмники уже ушли';
+    const r = Society.hire(g, o, g.player);
+    if (typeof r === 'string') return r;
+    sfx('horn');
+    ui.select({ kind: 'army', id: r.id });
+    return 'nopanel';
+  };
+
+  // ---------- погода на карте ----------
+  // Тени туч, снежная пелена и выгоревшая засухой земля — в мировых координатах, под городами.
+  const WX_TINT = { rain: [40, 58, 80, 0.2], storm: [26, 30, 46, 0.34], snow: [236, 242, 255, 0.32], drought: [196, 138, 48, 0.2] };
+  RenderExt.map.push((ctx, r, z, tl, br) => {
+    const g = r.g;
+    if (!g || !g.soc) return;
+    for (const f of g.soc.fronts) {
+      const t = WX_TINT[f.kind];
+      if (!t || f.x + f.r < tl.x || f.x - f.r > br.x || f.y + f.r < tl.y || f.y - f.r > br.y) continue;
+      const a = Society.fade(f) * t[3], rgb = t[0] + ',' + t[1] + ',' + t[2];
+      const gr = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r);
+      gr.addColorStop(0, `rgba(${rgb},${a})`); gr.addColorStop(0.55, `rgba(${rgb},${a * 0.75})`); gr.addColorStop(1, `rgba(${rgb},0)`);
+      ctx.fillStyle = gr;
+      ctx.fillRect(f.x - f.r, f.y - f.r, f.r * 2, f.r * 2);
+    }
+  });
+  // Дождь косыми штрихами, снег хлопьями, туман дымкой, молнии в ливень — в экранных пикселях поверх армий.
+  const WXR = { rain: null, snow: null, flash: 0, indT: 0, ind: '', bound: false };
+  const pool = n => { const a = []; for (let i = 0; i < n; i++) a.push({ x: Math.random(), y: Math.random(), th: Math.random(), l: 0.6 + Math.random() * 0.8 }); return a; };
+  RenderExt.screen.push((ctx, r, z, tl, br, dt) => {
+    const g = r.g;
+    if (!g || !g.soc) return;
+    WXR.indT -= dt;
+    if (WXR.indT <= 0) { WXR.indT = 0.5; indicator(g, r); }
+    const fr = g.soc.fronts;
+    let fog = false, wet = false, snow = false;
+    for (const f of fr) {
+      if (f.x + f.r < tl.x || f.x - f.r > br.x || f.y + f.r < tl.y || f.y - f.r > br.y) continue;
+      if (f.kind === 'fog') fog = true; else if (f.kind === 'rain' || f.kind === 'storm') wet = true; else if (f.kind === 'snow') snow = true;
+    }
+    const W = r.w, H = r.h, cam = r.cam;
+    if (fog) {
+      for (const f of fr) {
+        if (f.kind !== 'fog') continue;
+        const p = r.toScreen(f.x, f.y), R = f.r * z;
+        if (p.x + R < 0 || p.x - R > W || p.y + R < 0 || p.y - R > H) continue;
+        const a = Society.fade(f) * 0.55;
+        const gr = ctx.createRadialGradient(p.x, p.y, R * 0.1, p.x, p.y, R);
+        gr.addColorStop(0, `rgba(226,228,224,${a})`); gr.addColorStop(0.6, `rgba(226,228,224,${a * 0.75})`); gr.addColorStop(1, 'rgba(226,228,224,0)');
+        ctx.fillStyle = gr;
+        const x0 = Math.max(0, p.x - R), y0 = Math.max(0, p.y - R);
+        ctx.fillRect(x0, y0, Math.min(W, p.x + R) - x0, Math.min(H, p.y + R) - y0);
+      }
+    }
+    if (wet) {
+      if (!WXR.rain) WXR.rain = pool(260);
+      const k = Math.min(1.4, Math.max(0.7, z / 30));
+      ctx.beginPath();
+      for (const p of WXR.rain) {
+        p.y += dt * (0.9 + p.l * 0.5); p.x += dt * 0.2;
+        if (p.y > 1) { p.y -= 1; p.x = Math.random(); }
+        if (p.x > 1) p.x -= 1;
+        const sx = p.x * W, sy = p.y * H;
+        const w = Society.wx(g, (sx - W / 2) / z + cam.x, (sy - H / 2) / z + cam.y);
+        if (!w || (w.kind !== 'rain' && w.kind !== 'storm') || p.th > w.f * (w.kind === 'storm' ? 1 : 0.5)) continue;
+        const L = (w.kind === 'storm' ? 16 : 11) * p.l * k;
+        ctx.moveTo(sx, sy); ctx.lineTo(sx - L * 0.28, sy - L);
+      }
+      ctx.strokeStyle = 'rgba(196,212,236,0.55)';
+      ctx.lineWidth = 1.1;
+      ctx.stroke();
+      // молния, если камера в самом ливне
+      const c = Society.wx(g, cam.x, cam.y);
+      if (c && c.kind === 'storm' && c.f > 0.5 && WXR.flash <= 0 && Math.random() < dt * 0.12) WXR.flash = 0.16;
+    }
+    if (WXR.flash > 0) {
+      WXR.flash -= dt;
+      ctx.fillStyle = `rgba(255,252,236,${Math.max(0, WXR.flash) * 1.1})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+    if (snow) {
+      if (!WXR.snow) WXR.snow = pool(150);
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      for (const p of WXR.snow) {
+        p.y += dt * (0.05 + p.l * 0.04); p.x += Math.sin(r.time * 0.8 + p.th * 9) * 0.02 * dt;
+        if (p.y > 1) { p.y -= 1; p.x = Math.random(); }
+        if (p.x > 1) p.x -= 1; else if (p.x < 0) p.x += 1;
+        const sx = p.x * W, sy = p.y * H;
+        const w = Society.wx(g, (sx - W / 2) / z + cam.x, (sy - H / 2) / z + cam.y);
+        if (!w || w.kind !== 'snow' || p.th > w.f) continue;
+        const s = 1.4 + p.l * 1.4;
+        ctx.fillRect(sx - s / 2, sy - s / 2, s, s);
+      }
+    }
+  });
+
+  // Индикатор погоды в верхней планке: погода в центре карты (или ясно / мороз по сезону).
+  function indicator(g, r) {
+    const el = document.getElementById('weather');
+    if (!el) return;
+    if (!WXR.bound) {
+      WXR.bound = true;
+      el.addEventListener('click', () => {
+        if (!App.game || !App.renderer) return;
+        const gg = App.game, cam = App.renderer.cam, w = Society.wx(gg, cam.x, cam.y);
+        const text = w ? WEATHER[w.kind].name + ' в этих краях: ' + WEATHER[w.kind].tip + '.' : (gg.isWinter() ? 'Мороз, небо ясное. Зимой армии идут медленнее, а поля дают вдвое меньше.' : 'Ясно: погода не мешает ни походам, ни урожаю.');
+        if (App.ui) App.ui.toast(text, true);
+      });
+    }
+    const w = Society.wx(g, r.cam.x, r.cam.y);
+    const kind = w ? w.kind : g.isWinter() ? 'frost' : 'clear';
+    const name = w ? WEATHER[w.kind].name : g.isWinter() ? 'Мороз' : 'Ясно';
+    if (WXR.ind === kind) return;
+    WXR.ind = kind;
+    el.hidden = false;
+    el.className = 'k-' + kind;
+    el.title = 'Погода: ' + name.toLowerCase() + (w ? ' — ' + WEATHER[w.kind].tip : '');
+    el.innerHTML = wxSvg(kind) + '<span>' + name + '</span>';
+  }
+}
