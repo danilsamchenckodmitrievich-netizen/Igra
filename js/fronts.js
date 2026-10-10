@@ -660,9 +660,16 @@ const Fronts = {
     const divs = this.frontDivs(g, f);
     if (!divs.length) return;
     if (rt.lines.length) {
-      const slots = this.slotsOn(g, rt.lines, divs.length);
-      const ord = divs.map(a => { const q = this.nearestOn(rt.lines, a.x, a.y); return { a, s: q ? q.s : 0 }; }).sort((p, q) => p.s - q.s || p.a.id - q.a.id);
-      ord.forEach((o, i) => rt.slots.set(o.a.id, slots[i]));
+      // места раздаём заново, только если сменился состав фронта или сама линия: иначе дивизии метались бы
+      const sig = rt.key + '|' + divs.map(a => a.id).join(',');
+      if (sig !== rt.sig) {
+        rt.sig = sig;
+        const slots = this.slotsOn(g, rt.lines, divs.length);
+        const ord = divs.map(a => { const q = this.nearestOn(rt.lines, a.x, a.y); return { a, s: q ? q.s : 0 }; }).sort((p, q) => p.s - q.s || p.a.id - q.a.id);
+        rt.assign = new Map();
+        ord.forEach((o, i) => rt.assign.set(o.a.id, slots[i]));
+      }
+      for (const a of divs) rt.slots.set(a.id, rt.assign.get(a.id));
     }
     if (f.mode === 'attack') this.attack(g, f, rt, divs);
     else for (const a of divs) { const s = rt.slots.get(a.id); if (s) this.goHold(g, a, s); }
@@ -709,9 +716,13 @@ const Fronts = {
       if (a.state === 'battle' || a.state === 'retreat') continue;
       const s = rt.slots.get(a.id) || { x: a.x, y: a.y };
       if (a.org < DIV.attackOrg && a.state !== 'siege') { if (rt.slots.get(a.id)) this.goHold(g, a, s); continue; }
-      // вражеская дивизия рядом — бьём её
+      // вражеская дивизия рядом — бьём её (прежнюю цель не бросаем, пока она близко)
       let foe = null, fd = DIV.engage;
-      for (const e of g.armies) {
+      if (a.dest && a.dest.kind === 'army') {
+        const e = g.army(a.dest.id);
+        if (e && e.owner !== f.owner && e.state !== 'retreat' && dist(e.x, e.y, a.x, a.y) < DIV.engage * 1.5) { foe = e; fd = 0; }
+      }
+      if (!foe) for (const e of g.armies) {
         if (e.owner === f.owner || e.state === 'retreat' || !g.isHostile(f.owner, e.owner)) continue;
         if (Math.abs(e.x - a.x) > fd || Math.abs(e.y - a.y) > fd) continue;
         const d = dist(e.x, e.y, a.x, a.y);

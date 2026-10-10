@@ -1303,8 +1303,8 @@ class Game {
       if (a.state === 'battle' || a.immuneUntil > this.time) continue;
       for (let j = i + 1; j < arr.length; j++) {
         const b = arr[j];
-        if (!this.isHostile(a.owner, b.owner) || b.immuneUntil > this.time) continue;
         if (Math.abs(a.x - b.x) > COMBAT.contact || Math.abs(a.y - b.y) > COMBAT.contact) continue;
+        if (a.owner === b.owner || b.immuneUntil > this.time || !this.isHostile(a.owner, b.owner)) continue;
         if (dist(a.x, a.y, b.x, b.y) > COMBAT.contact) continue;
         // разбойники не трогают друг друга
         if (a.isBandit && b.isBandit) continue;

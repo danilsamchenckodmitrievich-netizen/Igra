@@ -188,7 +188,7 @@ const AI = {
   military(g, k, ctx) {
     this.defend(g, k, ctx);
     this.formDivisions(g, k, ctx);
-    for (const a of g.armiesOf(k.id)) if (a.ai === 'defend' && a.state === 'idle') a.ai = null;
+    for (const a of g.armiesOf(k.id)) if ((a.ai === 'defend' || a.ai === 'refit') && a.state === 'idle') a.ai = null;
     this.war(g, k, ctx);
   },
 
@@ -214,7 +214,9 @@ const AI = {
     }
   },
 
-  // 2. Лишние воины гарнизонов уходят в поле дивизиями: по шаблону, если состав подходит, иначе сводной.
+  // 2. Лишние воины гарнизонов уходят в поле дивизиями: по шаблону, если состав подходит, иначе сводной;
+  // немного лишних — пополнением в небольшую дивизию, стоящую у города. Обескровленные дивизии
+  // возвращаются в ближайший город гарнизоном, соседние малые — сливаются.
   formDivisions(g, k, ctx) {
     for (const c of ctx.cities) {
       if (c.siegeBy) continue;
@@ -236,22 +238,46 @@ const AI = {
             if (!n) continue;
             const sq = UNITS[u].squad;
             const per = unitPower({ [u]: sq });
-            const squads = Math.min(Math.floor(n / sq), Math.floor((extra - got) / per));
+            const squads = Math.min(Math.floor(n / sq), Math.floor((Math.min(extra, 900) - got) / per));
             if (squads > 0) { take[u] = squads * sq; got += squads * per; }
             if (got >= extra) break;
           }
-          if (menCount(take) >= 10) a = g.formArmy(c, take);
           extra = 0;
+          const men = menCount(take);
+          if (men < 10) break;
+          const host = g.armiesOf(k.id).find(o => o.state === 'idle' && menCount(o.units) + men <= 130 && dist(o.x, o.y, c.x + 0.5, c.y + 0.5) < 2.5);
+          if (host) {
+            addUnits(c.garrison, take, -1);
+            for (const u in take) if (!c.garrison[u]) delete c.wounds[u];
+            addUnits(host.units, take);
+            host.tpl = Fronts.guessTpl(g, k.id, host.units);
+            break;
+          }
+          if (men >= 30) a = g.formArmy(c, take);
         }
         if (!a) break;
       }
+    }
+    const divs = g.armiesOf(k.id);
+    for (const a of divs) {
+      if (a.state !== 'idle' || !g.armyById.has(a.id)) continue;
+      const men = menCount(a.units);
+      if (men < 25) {
+        let home = null, hd = 14;
+        for (const c of ctx.cities) { const d = dist(c.x + 0.5, c.y + 0.5, a.x, a.y); if (!c.siegeBy && d < hd) { hd = d; home = c; } }
+        if (home && !g.order(a, { kind: 'city', id: home.id })) { a.front = null; a.ai = 'refit'; }
+        continue;
+      }
+      if (men >= 70) continue;
+      const mate = divs.find(o => o !== a && o.state === 'idle' && g.armyById.has(o.id) && menCount(o.units) + men <= 130 && dist(o.x, o.y, a.x, a.y) < 1.5);
+      if (mate) g.mergeInto(mate, a);
     }
   },
 
   // 3–4. Армия и фронт: цель — посильный город (вольный, после перемирия — и державы); фронт по границе
   // с его хозяином, все полевые дивизии на фронте; хватает сил — наступление, нет — оборона.
   war(g, k, ctx) {
-    const field = g.armiesOf(k.id).filter(a => a.ai !== 'defend');
+    const field = g.armiesOf(k.id).filter(a => a.ai !== 'defend' && a.ai !== 'refit');
     if (!field.length) return;
     let grp = Fronts.groupsOf(g, k.id)[0];
     const loose = field.filter(a => a.group === null || a.group === undefined);
