@@ -146,10 +146,18 @@ const Founding = {
     for (const q of g.cities) if (q.x === i % w.W && q.y === (i - i % w.W) / w.W) return 'Здесь стоит город';
     return null;
   },
-  isGate(g, i) { const w = g.world; return !!(w.road[i] || w.river[i]); },
+  // Ворота — там, где стена пересекает дорогу или реку; вдоль дороги ворот нет (кроме концов).
+  isGate(g, i, set) {
+    const w = g.world;
+    if (!(w.road[i] || w.river[i])) return false;
+    const fd = g.fd, n = w.W * w.H;
+    let c = 0;
+    for (const j of [i - 1, i + 1, i - w.W, i + w.W]) if (j >= 0 && j < n && (w.road[j] || w.river[j]) && ((set && set.has(j)) || fd.walls.has(j))) c++;
+    return c <= 1;
+  },
   // Сколько и чего стоит ряд клеток на уровне level.
   wallPlan(g, owner, cells, level) {
-    const fd = this.fd(g), items = [], cost = {};
+    const fd = this.fd(g), items = [], cost = {}, set = new Set(cells);
     let time = 0, nNew = 0, nUp = 0;
     for (const i of cells) {
       if (this.cellBlock(g, owner, i)) continue;
@@ -157,7 +165,7 @@ const Founding = {
       if (rec && rec.o !== owner) continue;
       const p = this.price(rec, level);
       if (!p) continue;
-      const gate = rec ? rec.gate : this.isGate(g, i);
+      const gate = rec ? rec.gate : this.isGate(g, i, set);
       items.push({ i, gate });
       for (const r in p) cost[r] = (cost[r] || 0) + p[r];
       time += WALL_LV[level].time * (gate ? FWALL.gateTime : 1);
@@ -330,6 +338,7 @@ const Founding = {
     const fd = g.fd, rec = fd.walls.get(i);
     if (!rec || rec.l <= 0) return;
     rec.hp -= (siegePower(a.units) * FWALL.siege + menCount(a.units) * FWALL.men) * dt;
+    if (g.time - (fd.hurt.get(i) || -99) > 0.7 && typeof g.fxHit === 'function') g.fxHit(a.x + (a.x < i % g.world.W + 0.5 ? 0.5 : -0.5), a.y, 3);
     fd.hurt.set(i, g.time);
     // путь мог быть проложен до постройки стены: пробуем обход, иначе ломаем
     if (a.dest && g.time - (fd.rep.get(a.id) || -99) > 4) {
@@ -379,7 +388,7 @@ const Founding = {
     c.pop -= FOUND.pop;
     const s = { id: g.newId(), owner: c.owner, from: c.id, x: c.x + 0.5, y: c.y + 0.5, st: 'wait', tx: -1, ty: -1, pop: FOUND.pop };
     g.fd.settlers.push(s);
-    if (k.isPlayer) g.notify('Переселенцы из ' + c.name + ' готовы к походу: укажите место для нового города', 'good', c);
+    if (k.isPlayer) g.notify('Переселенцы города «' + c.name + '» готовы к походу: укажите место для нового города', 'good', c);
     return s;
   },
   // Почему на клетке нельзя основать город; null — можно. player — только разведанные клетки.
@@ -719,8 +728,8 @@ if (typeof document !== 'undefined') (function () {
 
   const css = document.createElement('style');
   css.textContent =
-    '#fd-bar{position:absolute;left:calc(env(safe-area-inset-left,0px) + 10px);bottom:calc(env(safe-area-inset-bottom,0px) + 10px);z-index:6;' +
-    'display:flex;flex-direction:column;gap:6px;max-width:min(540px,calc(100vw - 20px));padding:8px 10px;border-radius:10px;' +
+    '#fd-bar{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 10px);z-index:6;width:max-content;' +
+    'display:flex;flex-direction:column;gap:6px;max-width:min(520px,calc(100vw - 330px));padding:8px 10px;border-radius:10px;' +
     'background:rgba(43,30,18,.95);color:#f3e3bd;border:1px solid var(--wood-line);box-shadow:0 6px 20px rgba(0,0,0,.45);font-size:15px;line-height:1.25}' +
     '#fd-bar[hidden]{display:none}' +
     '#fd-bar .fd-t{font-family:var(--font-head);font-size:17px}#fd-bar .fd-h{color:#d9c796;font-size:13px}#fd-bar .fd-e{color:#ffb39e;font-weight:700}' +
@@ -979,13 +988,31 @@ if (typeof document !== 'undefined') (function () {
   const AL = 0.0001;
   // Стена как цепь клеток: куски между центрами соседних клеток, сверху вниз. lvOf(i) — показываемый уровень клетки.
   function simpleWall(ctx, x0, y0, x1, y1, l) {
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(30,18,8,.55)'; ctx.lineWidth = 0.4;
-    ctx.beginPath(); ctx.moveTo(x0, y0 + 0.04); ctx.lineTo(x1, y1 + 0.04); ctx.stroke();
-    ctx.strokeStyle = l === 1 ? '#9b6c3c' : l === 2 ? '#b9b3a6' : '#8d8f95'; ctx.lineWidth = l === 1 ? 0.26 : 0.34;
-    ctx.beginPath(); ctx.moveTo(x0, y0 - 0.08); ctx.lineTo(x1, y1 - 0.08); ctx.stroke();
-    ctx.strokeStyle = l === 1 ? '#5a3a1c' : '#5f6166'; ctx.lineWidth = 0.05;
-    ctx.beginPath(); ctx.moveTo(x0, y0 - 0.2); ctx.lineTo(x1, y1 - 0.2); ctx.stroke();
+    const h = l === 1 ? 0.3 : l === 2 ? 0.44 : 0.58;
+    const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1;
+    ctx.fillStyle = 'rgba(30,18,8,.25)';
+    ctx.beginPath(); ctx.moveTo(x0, y0 + 0.02); ctx.lineTo(x1, y1 + 0.02); ctx.lineTo(x1 + 0.1, y1 + 0.1); ctx.lineTo(x0 + 0.1, y0 + 0.1); ctx.closePath(); ctx.fill();
+    ctx.lineJoin = 'round'; ctx.lineWidth = 0.025; ctx.strokeStyle = 'rgba(30,18,8,.85)';
+    if (l === 1) {
+      const n = Math.max(2, Math.round(len / 0.13));
+      for (let i = 0; i <= n; i++) {
+        const x = x0 + dx * i / n, y = y0 + dy * i / n;
+        ctx.fillStyle = i % 2 ? '#a2723f' : '#8b5f31';
+        ctx.beginPath(); ctx.moveTo(x - 0.045, y); ctx.lineTo(x - 0.045, y - h); ctx.lineTo(x, y - h - 0.08); ctx.lineTo(x + 0.045, y - h); ctx.lineTo(x + 0.045, y); ctx.closePath(); ctx.fill(); ctx.stroke();
+      }
+      return;
+    }
+    ctx.fillStyle = l === 2 ? '#aaa493' : '#7f8187';
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.lineTo(x1, y1 - h); ctx.lineTo(x0, y0 - h); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = l === 2 ? '#cfc8b6' : '#a9abb0'; ctx.lineWidth = 0.1; ctx.lineCap = 'butt';
+    ctx.beginPath(); ctx.moveTo(x0, y0 - h); ctx.lineTo(x1, y1 - h); ctx.stroke();
+    // зубцы
+    const n = Math.max(2, Math.round(len / 0.24));
+    ctx.fillStyle = l === 2 ? '#bdb7a6' : '#92949a'; ctx.strokeStyle = 'rgba(30,18,8,.8)'; ctx.lineWidth = 0.022;
+    for (let i = 0; i <= n; i++) {
+      const x = x0 + dx * i / n, y = y0 + dy * i / n - h;
+      ctx.fillRect(x - 0.05, y - 0.13, 0.1, 0.1); ctx.strokeRect(x - 0.05, y - 0.13, 0.1, 0.1);
+    }
   }
   function drawSet(ctx, W, cells, lvOf, kOf, dmgOf) {
     const art = typeof WorldArt !== 'undefined' && typeof WorldArt.borderWall === 'function' ? WorldArt : null;
