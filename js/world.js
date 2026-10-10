@@ -1,6 +1,11 @@
 'use strict';
 // Генерация мира: рельеф, реки, места городов, дороги, территории, поиск пути.
 
+// Шаги распространения влияния: dx, dy и две промежуточные клетки (для диагоналей и ходов «конём»).
+const INFL_MOVES = [1, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0];
+for (const sx of [1, -1]) for (const sy of [1, -1]) INFL_MOVES.push(sx, sy, sx, 0, 0, sy);
+for (const sx of [1, -1]) for (const sy of [1, -1]) INFL_MOVES.push(2 * sx, sy, sx, 0, sx, sy, sx, 2 * sy, 0, sy, sx, sy);
+
 class World {
   constructor(seed, sizeKey) {
     const sz = MAP_SIZES[sizeKey] || MAP_SIZES.medium;
@@ -333,43 +338,137 @@ class World {
     return path.map(k => ({ x: k % W + 0.5, y: Math.floor(k / W) + 0.5 }));
   }
 
-  // Территории: каждая клетка принадлежит ближайшему (по стоимости пути) городу в пределах его радиуса.
-  computeTerritory(cities) {
-    const W = this.W, n = W * this.H;
-    const best = new Float32Array(n).fill(Infinity);
-    const owner = this.cityOf;
-    owner.fill(-1);
-    const heap = new MinHeap();
-    for (const c of cities) {
-      const i = this.idx(c.x, c.y);
-      best[i] = 0; owner[i] = c.id;
-      heap.push(i, 0);
+  // Цена шага влияния по клетке: местность мешает слабее, чем походу армии (лес, холмы, горы, броды),
+  // дороги немного помогают. Шум делает цену неровной, чтобы края и стыки владений были живыми.
+  // Не меняется за партию, поэтому считается один раз.
+  prepareInfluence() {
+    const n = this.W * this.H;
+    const nz = makeNoise(this.seed + 53);
+    this.inflStep = new Float32Array(n);
+    this.inflEdge = new Float32Array(n);
+    this.infl = new Float32Array(n);
+    this.inflPot = new Float64Array(n);   // двойная точность: сравнивается с приоритетами кучи
+    this.inflOwn = new Int16Array(n);
+    this.inflLock = new Int16Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = i % this.W, y = (i - x) / this.W;
+      if (!this.passable(i)) { this.inflStep[i] = Infinity; continue; }
+      const t = this.terrain[i];
+      let c = 1 + (TERRAIN[t].cost - 1) * INFLUENCE.terrain;
+      if (this.road[i]) c = Math.min(c, INFLUENCE.road);
+      else if (this.river[i]) c += INFLUENCE.river;
+      // крупные пятна полегче и потруднее плюс неровность в клетку, чтобы край не шёл по линейке
+      const grain = ((Math.imul(i ^ 0x9e3779b9, 0x85ebca6b) >>> 16) & 255) / 255 - 0.5;
+      this.inflStep[i] = c * Math.max(0.6, 1 + (fractal(nz, x * 0.11, y * 0.11, 2) - 0.5) * INFLUENCE.wobble + grain * INFLUENCE.grain);
+      // край: крупные выступы и заливы плюс мелкая рябь
+      this.inflEdge[i] = ((fractal(nz, x * 0.14 + 31, y * 0.14 + 7, 2) - 0.5) * 0.75 + (nz(x * 0.33 + 70, y * 0.33 + 90) - 0.5) * 0.25) * INFLUENCE.edge;
     }
-    const byId = new Map(cities.map(c => [c.id, c]));
-    // неровный край владений: радиус города колеблется по шуму, чтобы границы не были восьмиугольниками
-    if (!this.borderNoise) this.borderNoise = makeNoise(this.seed + 53);
-    const bn = this.borderNoise;
-    while (heap.size) {
-      const k = heap.pop();
-      const c = byId.get(owner[k]);
+  }
+
+  // Территории — это влияние городов. У каждого города своя сила (дальность в клетках, reach):
+  // многоисточниковый Дейкстра стартует с «долгом» −reach, и клетка отходит тому городу, у которого
+  // запас reach − цена пути наибольший и больше нуля (взвешенная диаграмма Вороного по цене пути).
+  // reach — Map id города → клетки; без неё — прежний радиус по уровню.
+  // Итог: cityOf (чья клетка), infl (сила влияния 0..1: 1 у города, 0 на краю), c.tiles (для хозяйства).
+  computeTerritory(cities, reach) {
+    const W = this.W, H = this.H, n = W * H;
+    if (!this.inflStep) this.prepareInfluence();
+    const step = this.inflStep, edge = this.inflEdge, pot = this.inflPot, own = this.inflOwn, lock = this.inflLock;
+    const owner = this.cityOf, infl = this.infl;
+    const INF = Infinity;   // в горячем цикле — без поиска по глобальному объекту
+    pot.fill(INF); own.fill(-1); lock.fill(-1);
+    const rs = new Float32Array(cities.length), es = new Float32Array(cities.length);
+    // своя двоичная куча на типизированных массивах: в горячем цикле заметно быстрее общей MinHeap
+    let hi = this.inflHeapI || new Int32Array(4096), hp = this.inflHeapP || new Float64Array(4096), hn = 0;
+    const push = (item, pr) => {
+      if (hn === hi.length) {
+        const a = new Int32Array(hn * 2), b = new Float64Array(hn * 2);
+        a.set(hi); b.set(hp); hi = a; hp = b;
+      }
+      let i = hn++;
+      while (i > 0) {
+        const par = (i - 1) >> 1;
+        if (hp[par] <= pr) break;
+        hi[i] = hi[par]; hp[i] = hp[par];
+        i = par;
+      }
+      hi[i] = item; hp[i] = pr;
+    };
+    const pop = () => {
+      const top = hi[0];
+      if (--hn > 0) {
+        const li = hi[hn], lp = hp[hn];
+        let i = 0;
+        for (;;) {
+          let c = 2 * i + 1;
+          if (c >= hn) break;
+          if (c + 1 < hn && hp[c + 1] < hp[c]) c++;
+          if (hp[c] >= lp) break;
+          hi[i] = hi[c]; hp[i] = hp[c];
+          i = c;
+        }
+        hi[i] = li; hp[i] = lp;
+      }
+      return top;
+    };
+    cities.forEach((c, ci) => {
+      const r = reach && reach.has(c.id) ? reach.get(c.id) : CITY_LEVELS[c.level].radius + 0.5;
+      const i = this.idx(c.x, c.y);
+      rs[ci] = r;
+      es[ci] = Math.min(1, r / 4.5);   // у слабого города и край колеблется меньше
+      lock[i] = ci;   // клетка самого города всегда его, как бы ни давили соседи
+      if (-r < pot[i]) { pot[i] = -r; own[i] = ci; push(i, -r); }
+    });
+    // 16 направлений (с ходами «конём»): владения выходят круглыми, а не восьмиугольными
+    const D = INFL_MOVES;
+    while (hn > 0) {
+      const pk = hp[0], k = pop();
+      const p = pot[k];
+      if (pk > p) continue;   // устаревшая запись: клетку уже взяли дешевле
+      const ci = own[k], e = es[ci];
       const x = k % W, y = (k - x) / W;
-      const r = CITY_LEVELS[c.level].radius;
-      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
-        const nx = x + dx, ny = y + dy;
-        if (!this.inside(nx, ny)) continue;
-        const j = this.idx(nx, ny);
-        if (!this.passable(j)) continue;
-        if (dist(nx, ny, c.x, c.y) > r + 0.5 + (fractal(bn, nx * 0.22, ny * 0.22, 2) - 0.5) * 5) continue;
-        const ng = best[k] + this.moveCost(j) * (dx && dy ? 1.41 : 1);
-        if (ng < best[j]) { best[j] = ng; owner[j] = c.id; heap.push(j, ng); }
+      for (let d = 0; d < 16; d++) {
+        const o = d * 6, nx = x + D[o], ny = y + D[o + 1];
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const j = ny * W + nx;
+        const sj = step[j];
+        if (sj === INF) continue;
+        if (lock[j] >= 0 && lock[j] !== ci) continue;
+        let np;
+        if (d < 4) np = p + (step[k] + sj) * 0.5;
+        else {
+          // по диагонали и «конём» не просачиваемся через воду: промежуточные клетки должны быть сушей
+          const m1 = (y + D[o + 3]) * W + x + D[o + 2], m2 = (y + D[o + 5]) * W + x + D[o + 4];
+          if (step[m1] === INF || step[m2] === INF) continue;
+          np = d < 8 ? p + (step[k] + sj) * 0.7071 : p + (step[k] + step[m1] + step[m2] + sj) * 0.559;
+        }
+        if (np >= pot[j] || edge[j] * e - np <= 0) continue;
+        pot[j] = np; own[j] = ci;
+        push(j, np);
       }
     }
-    // береговые воды у городов тоже рисуем своими (для красоты границ)
+    this.inflHeapI = hi; this.inflHeapP = hp;
+    // дырки в одну клетку (шум края) заделываем: вся суша вокруг — одного города
+    for (let i = 0; i < n; i++) {
+      if (own[i] >= 0 || step[i] === INF) continue;
+      const x = i % W;
+      let ci = -1, cnt = 0;
+      for (let d = 0; d < 4; d++) {
+        const j = d === 0 ? (x > 0 ? i - 1 : -1) : d === 1 ? (x < W - 1 ? i + 1 : -1) : d === 2 ? i - W : i + W;
+        if (j < 0 || j >= n || step[j] === INF) continue;
+        if (own[j] < 0 || (ci >= 0 && own[j] !== ci)) { cnt = -1; break; }
+        ci = own[j]; cnt++;
+      }
+      if (cnt >= 2) { own[i] = ci; pot[i] = edge[i] * es[ci]; }
+    }
     for (const c of cities) c.tiles = { river: 0 };
     for (let i = 0; i < n; i++) {
-      const id = owner[i];
-      if (id < 0) continue;
-      const c = byId.get(id);
+      const ci = own[i];
+      if (ci < 0) { owner[i] = -1; infl[i] = 0; continue; }
+      const c = cities[ci];
+      owner[i] = c.id;
+      const m = lock[i] === ci ? rs[ci] : edge[i] * es[ci] - pot[i];
+      infl[i] = m >= rs[ci] ? 1 : m > 0 ? m / rs[ci] : 0;
       const t = this.terrain[i];
       c.tiles[t] = (c.tiles[t] || 0) + 1;
       if (this.river[i]) c.tiles.river++;

@@ -382,28 +382,196 @@ class Renderer {
     return c ? c.owner : null;
   }
 
+  // Слой земель (1 пиксель = 1 клетка, при увеличении сглаживается): цвет державы, насыщенный у города
+  // и гаснущий к краю по силе влияния world.infl; у самой границы — полоса погуще, чтобы край читался.
+  // Вольные земли бледнее. Плюс изолинии владений каждой державы для контуров (drawBorders): их и
+  // миникарту пересобираем, только если сдвинулись границы держав, а не одних городов внутри державы.
   rebuildTerritory() {
-    const g = this.g, w = g.world, W = w.W, H = w.H;
+    const g = this.g, w = g.world, W = w.W, H = w.H, n = W * H;
+    const NONE = -99;
     const cv = this.layers.territory, c = cv.getContext('2d');
-    const img = c.createImageData(W, H);
+    const img = c.createImageData(W, H), px = img.data;
+    if (!this.terrOwn || this.terrOwn.length !== n || this.terrW !== W) { this.terrOwn = new Int32Array(n); this.terrW = W; this.borders = null; }
+    const own = this.terrOwn, infl = w.infl;
+    const kOf = new Map(g.cities.map(q => [q.id, q.owner]));
+    let same = !!this.borders;
+    for (let i = 0; i < n; i++) {
+      const cid = w.cityOf[i];
+      const ko = cid < 0 ? undefined : kOf.get(cid);
+      const k = ko === undefined ? NONE : ko;
+      if (own[i] !== k) { own[i] = k; same = false; }
+    }
+    // цвет и прозрачность по силе влияния (таблица на 64 ступени): держава и вольный город
+    if (!this.terrAlpha) {
+      const A = this.terrAlpha = new Uint8Array(130);
+      for (let q = 0; q <= 64; q++) {
+        const f = Math.pow(q / 64, 1.2);
+        A[q] = Math.round((0.1 + 0.42 * f) * 255);
+        A[65 + q] = Math.round((0.05 + 0.2 * f) * 255);
+      }
+    }
+    const A = this.terrAlpha, rimK = Math.round(0.2 * 255), rimF = Math.round(0.09 * 255);
     const colors = new Map(g.kingdoms.map(k => [k.id, parseInt(k.color.slice(1), 16)]));
-    const own = new Int32Array(W * H);
-    for (let i = 0; i < W * H; i++) {
-      const k = this.kingdomOfTile(i);
-      own[i] = k === null ? -99 : k;
-      if (k === null) continue;
-      const col = k === -1 ? 0x8a7f6a : colors.get(k);
-      img.data[i * 4] = (col >> 16) & 255; img.data[i * 4 + 1] = (col >> 8) & 255; img.data[i * 4 + 2] = col & 255;
-      img.data[i * 4 + 3] = k === -1 ? 30 : 62;
+    colors.set(-1, parseInt(NEUTRAL_COLOR.slice(1), 16));
+    for (let i = 0; i < n; i++) {
+      const k = own[i];
+      if (k === NONE) continue;
+      const x = i % W;
+      const rim = (x > 0 && own[i - 1] !== k) || (x < W - 1 && own[i + 1] !== k) || (i >= W && own[i - W] !== k) || (i + W < n && own[i + W] !== k);
+      const q = infl ? Math.round(infl[i] * 64) : 64;
+      const a = k === -1 ? Math.max(A[65 + q], rim ? rimF : 0) : Math.max(A[q], rim ? rimK : 0);
+      const col = colors.get(k), o = i * 4;
+      px[o] = (col >> 16) & 255; px[o + 1] = (col >> 8) & 255; px[o + 2] = col & 255; px[o + 3] = a;
     }
     c.putImageData(img, 0, 0);
-    // границы: изолиния владений каждой державы
-    const paths = new Map();
-    const ids = new Set();
-    for (let i = 0; i < W * H; i++) if (own[i] !== -99) ids.add(own[i]);
-    for (const k of ids) paths.set(k, this.contour((x, y) => x >= 0 && y >= 0 && x < W && y < H && own[y * W + x] === k, 0, 0, W, H));
-    this.borders = paths;
+    if (same) return;
+    this.borders = this.territoryPaths(own, W, H, NONE);
     this.mmBase = null;
+  }
+
+  // Изолинии владений всех держав за один проход марширующих квадратов (как contour, но сразу для всех).
+  // Отрезки в удвоенных координатах сшиваются в цепочки, а цепочки готовятся к отрисовке (borderChain).
+  // Итог: Map держава → { box, chains }.
+  territoryPaths(own, W, H, NONE) {
+    const segs = new Map();
+    const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? NONE : own[y * W + x]);
+    const ks = [0, 0, 0, 0];
+    for (let y = -1; y < H; y++) {
+      for (let x = -1; x < W; x++) {
+        const a = at(x, y), b = at(x + 1, y), c = at(x + 1, y + 1), d = at(x, y + 1);
+        if (a === b && b === c && c === d) continue;
+        ks[0] = a; ks[1] = b; ks[2] = c; ks[3] = d;
+        const X = 2 * x + 1, Y = 2 * y + 1;
+        for (let m = 0; m < 4; m++) {
+          const k = ks[m];
+          if (k === NONE || ks.indexOf(k) !== m) continue;
+          const code = (a === k ? 8 : 0) + (b === k ? 4 : 0) + (c === k ? 2 : 0) + (d === k ? 1 : 0);
+          let s = segs.get(k);
+          if (!s) segs.set(k, (s = []));
+          // точки на серединах рёбер: верх (X+1,Y), право (X+2,Y+1), низ (X+1,Y+2), лево (X,Y+1)
+          switch (code) {
+            case 1: case 14: s.push(X, Y + 1, X + 1, Y + 2); break;
+            case 2: case 13: s.push(X + 1, Y + 2, X + 2, Y + 1); break;
+            case 3: case 12: s.push(X, Y + 1, X + 2, Y + 1); break;
+            case 4: case 11: s.push(X + 1, Y, X + 2, Y + 1); break;
+            case 5: s.push(X, Y + 1, X + 1, Y, X + 1, Y + 2, X + 2, Y + 1); break;
+            case 6: case 9: s.push(X + 1, Y, X + 1, Y + 2); break;
+            case 7: case 8: s.push(X, Y + 1, X + 1, Y); break;
+            case 10: s.push(X + 1, Y, X + 2, Y + 1, X, Y + 1, X + 1, Y + 2); break;
+          }
+        }
+      }
+    }
+    const out = new Map();
+    const key = (px, py) => (py + 4) * 65536 + px + 4;
+    for (const [k, s] of segs) {
+      const ns = s.length / 4;
+      // у каждой точки не больше двух отрезков: ends[2t], ends[2t+1] — концы (номер отрезка × 2 + конец)
+      const slot = new Map();
+      const ends = new Int32Array(ns * 4).fill(-1);
+      for (let e = 0; e < ns * 2; e++) {
+        const kk = key(s[e * 2], s[e * 2 + 1]);
+        let t = slot.get(kk);
+        if (t === undefined) { t = slot.size; slot.set(kk, t); }
+        if (ends[t * 2] < 0) ends[t * 2] = e; else ends[t * 2 + 1] = e;
+      }
+      const used = new Uint8Array(ns);
+      const other = e => {
+        const t = slot.get(key(s[e * 2], s[e * 2 + 1]));
+        const f = ends[t * 2] === e ? ends[t * 2 + 1] : ends[t * 2];
+        return f >= 0 && !used[f >> 1] ? f : -1;
+      };
+      const chains = [], box = [Infinity, Infinity, -Infinity, -Infinity];
+      for (let s0 = 0; s0 < ns; s0++) {
+        if (used[s0]) continue;
+        used[s0] = 1;
+        const pts = [[s[s0 * 4], s[s0 * 4 + 1]], [s[s0 * 4 + 2], s[s0 * 4 + 3]]];
+        let e = s0 * 2 + 1, f;
+        while ((f = other(e)) >= 0) {
+          used[f >> 1] = 1;
+          e = f ^ 1;
+          pts.push([s[e * 2], s[e * 2 + 1]]);
+        }
+        const closed = pts.length > 2 && pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1];
+        if (!closed) {
+          e = s0 * 2;
+          while ((f = other(e)) >= 0) {
+            used[f >> 1] = 1;
+            e = f ^ 1;
+            pts.unshift([s[e * 2], s[e * 2 + 1]]);
+          }
+        }
+        // с какой стороны цепочки свои земли: шаг в полклетки вбок от середины первого отрезка
+        const p0 = pts[0], p1 = pts[1];
+        const dx = p1[0] - p0[0], dy = p1[1] - p0[1], l = Math.sqrt(dx * dx + dy * dy);
+        const side = at(Math.floor((p0[0] + p1[0]) / 4 + dy / l * 0.5), Math.floor((p0[1] + p1[1]) / 4 - dx / l * 0.5)) === k ? 1 : -1;
+        const ch = this.borderChain(pts, closed, side);
+        chains.push(ch);
+        box[0] = Math.min(box[0], ch.box[0]); box[1] = Math.min(box[1], ch.box[1]);
+        box[2] = Math.max(box[2], ch.box[2]); box[3] = Math.max(box[3], ch.box[3]);
+      }
+      out.set(k, { box, chains });
+    }
+    return out;
+  }
+
+  // Цепочка границы для отрисовки: сглаженные (как smoothPath) точки в клетках, у каждой — нормаль
+  // внутрь своих земель (по ней кладётся кайма) и рамки кусков по K точек, чтобы рисовать только видимое.
+  // Замкнутая цепочка повторяет первую точку в конце.
+  borderChain(pts, closed, side) {
+    const K = 24;
+    let q = pts.map(v => [v[0] / 2, v[1] / 2]);
+    if (closed) q.pop();
+    for (let it = 0; it < 2 && q.length > 2; it++) {
+      const r = [], n = q.length;
+      if (!closed) r.push(q[0]);
+      for (let i = 0; i < (closed ? n : n - 1); i++) {
+        const a = q[i], b = q[(i + 1) % n];
+        r.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25], [a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+      }
+      if (!closed) r.push(q[n - 1]);
+      q = r;
+    }
+    const n = q.length, m = closed ? n + 1 : n;
+    const P = new Float32Array(m * 2), N = new Float32Array(m * 2);
+    for (let i = 0; i < m; i++) {
+      const a = q[i % n];
+      const pv = closed ? q[(i + n - 1) % n] : q[Math.max(0, i - 1)];
+      const nx = closed ? q[(i + 1) % n] : q[Math.min(n - 1, i + 1)];
+      const tx = nx[0] - pv[0], ty = nx[1] - pv[1], l = Math.sqrt(tx * tx + ty * ty) || 1;
+      P[i * 2] = a[0]; P[i * 2 + 1] = a[1];
+      N[i * 2] = side * ty / l; N[i * 2 + 1] = -side * tx / l;
+    }
+    const np = Math.max(1, Math.ceil((m - 1) / K));
+    const B = new Float32Array(np * 4), box = [Infinity, Infinity, -Infinity, -Infinity];
+    for (let pc = 0; pc < np; pc++) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let i = pc * K, e = Math.min(m - 1, i + K); i <= e; i++) {
+        const x = P[i * 2], y = P[i * 2 + 1];
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+      B[pc * 4] = x0; B[pc * 4 + 1] = y0; B[pc * 4 + 2] = x1; B[pc * 4 + 3] = y1;
+      box[0] = Math.min(box[0], x0); box[1] = Math.min(box[1], y0); box[2] = Math.max(box[2], x1); box[3] = Math.max(box[3], y1);
+    }
+    return { pts: P, nrm: N, boxes: B, box, piece: K };
+  }
+
+  // Вершины цепочки в путь p: только куски в рамке [x0,y0]–[x1,y1] (whole — всю цепочку целиком),
+  // каждая точка сдвинута на d клеток по нормали внутрь, при мелком масштабе берётся каждая s-я точка.
+  // Соседние видимые куски идут одной линией, без стыков.
+  emitBorder(p, ch, d, s, x0, y0, x1, y1, whole) {
+    const P = ch.pts, N = ch.nrm, B = ch.boxes, K = ch.piece, last = P.length / 2 - 1;
+    let open = false;
+    for (let pc = 0, a = 0; a < last; pc++, a += K) {
+      const b = Math.min(a + K, last), o = pc * 4;
+      if (!whole && (B[o] > x1 || B[o + 2] < x0 || B[o + 1] > y1 || B[o + 3] < y0)) { open = false; continue; }
+      for (let i = open ? Math.min(a + s, b) : a; ; i = Math.min(i + s, b)) {
+        const x = P[i * 2] + N[i * 2] * d, y = P[i * 2 + 1] + N[i * 2 + 1] * d;
+        if (open) p.lineTo(x, y); else { p.moveTo(x, y); open = true; }
+        if (i === b) break;
+      }
+    }
   }
 
   rebuildFog() {
@@ -501,27 +669,49 @@ class Renderer {
     if (season === 3) this.drawSnowfall(ctx, dt);
   }
 
+  // Границы: у каждой державы цветная кайма вдоль края с внутренней стороны (линия, сдвинутая по нормали
+  // внутрь, без дорогого clip), поверх — общая чернильная линия. На стыке двух держав видны обе каймы,
+  // разделённые чернилом. Вольные — пунктир. Пути собираются каждый кадр только из видимых кусков.
   drawBorders(ctx, z) {
-    if (!this.borders) return;
-    ctx.lineCap = 'round';
-    for (const [k, p] of this.borders) {
-      if (k === -1) {
-        ctx.setLineDash([0.25, 0.2]);
-        ctx.strokeStyle = 'rgba(80,70,55,0.55)';
-        ctx.lineWidth = 1.2 / z;
-        ctx.stroke(p);
-        ctx.setLineDash([]);
-        continue;
-      }
+    const B = this.borders;
+    if (!B) return;
+    const tl = this.toWorld(0, 0), br = this.toWorld(this.w, this.h);
+    const ink = Math.max(1.5 / z, 0.035), band = Math.max(3 / z, 0.05);
+    const pad = band + ink;
+    const x0 = tl.x - pad, y0 = tl.y - pad, x1 = br.x + pad, y1 = br.y + pad;
+    const inView = b => !(b[0] > x1 || b[2] < x0 || b[1] > y1 || b[3] < y0);
+    const s = z < 12 ? 2 : 1;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    const free = B.get(-1);
+    if (free && inView(free.box)) {
+      // пунктир (штрих постоянной длины на экране) по каждой цепочке целиком, чтобы штрихи не ползли
+      // при сдвиге карты
+      const p = new Path2D();
+      for (const ch of free.chains) if (inView(ch.box)) this.emitBorder(p, ch, 0, s, x0, y0, x1, y1, true);
+      ctx.setLineDash([6 / z, 5 / z]);
+      ctx.strokeStyle = 'rgba(80,70,55,0.5)';
+      ctx.lineWidth = 1.2 / z;
+      ctx.stroke(p);
+      ctx.setLineDash([]);
+    }
+    const line = new Path2D(), d = band / 2 + ink * 0.3;
+    for (const [k, t] of B) {
+      if (k === -1 || !inView(t.box)) continue;
       const kg = this.g.kingdom(k);
       if (!kg) continue;
-      ctx.strokeStyle = 'rgba(30,20,10,0.55)';
-      ctx.lineWidth = Math.max(3.2 / z, 0.07);
-      ctx.stroke(p);
-      ctx.strokeStyle = kg.color;
-      ctx.lineWidth = Math.max(1.8 / z, 0.04);
+      const p = new Path2D();
+      for (const ch of t.chains) {
+        if (!inView(ch.box)) continue;
+        this.emitBorder(p, ch, d, s, x0, y0, x1, y1, false);
+        this.emitBorder(line, ch, 0, s, x0, y0, x1, y1, false);
+      }
+      ctx.strokeStyle = hexA(kg.color, 0.8);
+      ctx.lineWidth = band;
       ctx.stroke(p);
     }
+    ctx.strokeStyle = 'rgba(42,27,13,0.8)';
+    ctx.lineWidth = ink;
+    ctx.stroke(line);
   }
 
   drawPaths(ctx, z) {
