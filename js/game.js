@@ -555,7 +555,7 @@ class Game {
   }
 
   setPath(a, x, y) {
-    const p = this.world.findPath(a.x, a.y, x, y);
+    const p = this.world.findPath(a.x, a.y, x, y, a.owner);
     if (!p) return false;
     p[0] = { x: a.x, y: a.y };
     a.path = p; a.pathI = 1;
