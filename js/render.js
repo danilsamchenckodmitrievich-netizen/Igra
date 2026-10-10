@@ -93,19 +93,10 @@ class Renderer {
     return shade(TERRAIN_COLORS[t], 0.97 + tileHash(i, 1) * 0.06);
   }
 
-  // Цвета клеток в картинке 1 пиксель = 1 клетка; при увеличении сглаживаются в мягкую заливку.
+  // Картинка суши 1 пиксель = 1 клетка (при увеличении сглаживается в мягкую заливку); заодно WorldArt
+  // готовит картинку воды с глубинами и прочие заготовки мира.
   buildBaseImage() {
-    const w = this.g.world;
-    const cv = document.createElement('canvas');
-    cv.width = w.W; cv.height = w.H;
-    const c = cv.getContext('2d');
-    const img = c.createImageData(w.W, w.H);
-    for (let i = 0; i < w.W * w.H; i++) {
-      const n = parseInt(this.terrainColor(w.terrain[i], i).slice(1), 16);
-      img.data[i * 4] = (n >> 16) & 255; img.data[i * 4 + 1] = (n >> 8) & 255; img.data[i * 4 + 2] = n & 255; img.data[i * 4 + 3] = 255;
-    }
-    c.putImageData(img, 0, 0);
-    return cv;
+    return WorldArt.prepareWorld(this);
   }
 
   // Изолиния двоичного поля по центрам клеток (марширующие квадраты). Отрезки сшиваются в цепочки
@@ -193,68 +184,9 @@ class Renderer {
     if (closed) p.closePath();
   }
 
-  bakeChunk(cx, cy) {
-    const g = this.g, w = g.world, W = w.W;
-    const cv = document.createElement('canvas');
-    cv.width = cv.height = CH * TP;
-    const c = cv.getContext('2d');
-    c.scale(TP, TP);
-    c.translate(-cx * CH, -cy * CH);
-    const x0 = Math.max(0, cx * CH - 1), x1 = Math.min(W - 1, cx * CH + CH);
-    const y0 = Math.max(0, cy * CH - 1), y1 = Math.min(w.H - 1, cy * CH + CH + 1);
-    // мягкая заливка местности
-    c.imageSmoothingEnabled = true;
-    c.drawImage(this.baseImg, 0, 0, W, w.H);
-    // береговая линия
-    c.lineCap = 'round'; c.lineJoin = 'round';
-    c.strokeStyle = 'rgba(245,236,205,0.55)'; c.lineWidth = 0.22;
-    c.stroke(this.coast);
-    c.strokeStyle = 'rgba(70,52,30,0.75)'; c.lineWidth = 0.07;
-    c.stroke(this.coast);
-    // волны и бумажная фактура
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const i = y * W + x;
-      const t = w.terrain[i];
-      if (t === T.DEEP && tileHash(i, 3) < 0.22) {
-        c.strokeStyle = 'rgba(220,235,240,0.35)';
-        c.lineWidth = 0.05;
-        const ox = x + 0.25 + tileHash(i, 4) * 0.4, oy = y + 0.4 + tileHash(i, 5) * 0.3;
-        c.beginPath();
-        c.arc(ox, oy, 0.14, Math.PI * 1.1, Math.PI * 1.9);
-        c.arc(ox + 0.27, oy, 0.14, Math.PI * 1.1, Math.PI * 1.9);
-        c.stroke();
-      }
-      c.fillStyle = 'rgba(60,40,20,0.06)';
-      for (let k = 0; k < 3; k++) c.fillRect(x + tileHash(i, 10 + k), y + tileHash(i, 20 + k), 0.06, 0.06);
-    }
-    // реки
-    c.lineCap = 'round'; c.lineJoin = 'round';
-    for (const r of this.riverLines) this.smoothLine(c, r, 0.46, '#4c7d93');
-    for (const r of this.riverLines) this.smoothLine(c, r, 0.3, '#7ab3c8');
-    // дороги
-    c.setLineDash([0.32, 0.2]);
-    for (const r of w.roads) this.smoothLine(c, r, 0.16, 'rgba(110,78,40,0.85)');
-    c.setLineDash([]);
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const i = y * W + x;
-      if (w.road[i] && w.river[i]) {
-        c.fillStyle = '#8a643a';
-        c.fillRect(x + 0.25, y + 0.3, 0.5, 0.4);
-        c.strokeStyle = '#4e3418'; c.lineWidth = 0.04;
-        c.strokeRect(x + 0.25, y + 0.3, 0.5, 0.4);
-      }
-    }
-    // объекты местности сверху вниз, чтобы нижние перекрывали верхние
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const i = y * W + x;
-      const t = w.terrain[i];
-      if (w.road[i] && t !== T.MOUNTAIN && t !== T.SNOW) continue;
-      if (t === T.FOREST) this.drawTrees(c, x, y, i);
-      else if (t === T.HILLS) this.drawHill(c, x, y, i);
-      else if (t === T.MOUNTAIN || t === T.SNOW) this.drawMountain(c, x, y, i, t === T.SNOW);
-      else if (t === T.PLAINS && tileHash(i, 30) < 0.14) this.drawTuft(c, x, y, i);
-    }
-    return cv;
+  // Кусок местности CH×CH клеток при tp пикселях на клетку: вода, суша, реки, дороги, леса, горы (js/art-world.js).
+  bakeChunk(cx, cy, tp) {
+    return WorldArt.bakeTerrain(this, cx, cy, tp || TP);
   }
 
   // Реки текут по клеткам и выходят прямыми; для рисунка слегка изгибаем их поперёк течения (в пределах клетки).
@@ -285,76 +217,29 @@ class Renderer {
     c.stroke();
   }
 
-  drawTrees(c, x, y, i) {
-    const n = 2 + (tileHash(i, 40) < 0.5 ? 1 : 0);
-    for (let k = 0; k < n; k++) {
-      const tx = x + 0.2 + tileHash(i, 41 + k) * 0.6, ty = y + 0.25 + tileHash(i, 51 + k) * 0.55;
-      const r = 0.17 + tileHash(i, 61 + k) * 0.08;
-      c.fillStyle = 'rgba(40,50,20,0.25)';
-      c.beginPath(); c.ellipse(tx + 0.05, ty + r * 0.9, r, r * 0.45, 0, 0, TAU); c.fill();
-      c.fillStyle = '#5a4128';
-      c.fillRect(tx - 0.025, ty, 0.05, r * 0.9);
-      c.fillStyle = '#3f6a2f';
-      c.beginPath(); c.arc(tx, ty - r * 0.2, r, 0, TAU); c.fill();
-      c.fillStyle = '#5d8a45';
-      c.beginPath(); c.arc(tx - r * 0.3, ty - r * 0.45, r * 0.5, 0, TAU); c.fill();
-      c.strokeStyle = 'rgba(30,40,15,0.6)'; c.lineWidth = 0.025;
-      c.beginPath(); c.arc(tx, ty - r * 0.2, r, 0, TAU); c.stroke();
-    }
-  }
-  drawHill(c, x, y, i) {
-    const n = tileHash(i, 70) < 0.5 ? 1 : 2;
-    for (let k = 0; k < n; k++) {
-      const hx = x + 0.2 + tileHash(i, 71 + k) * 0.6, hy = y + 0.65 + tileHash(i, 81 + k) * 0.25;
-      const r = 0.3 + tileHash(i, 91 + k) * 0.12;
-      c.fillStyle = '#a58d5c';
-      c.beginPath(); c.ellipse(hx, hy, r, r * 0.75, 0, Math.PI, 0); c.closePath(); c.fill();
-      c.fillStyle = 'rgba(70,50,25,0.35)';
-      c.beginPath(); c.ellipse(hx, hy, r, r * 0.75, 0, Math.PI * 1.5, 0); c.lineTo(hx, hy); c.closePath(); c.fill();
-      c.strokeStyle = 'rgba(70,50,25,0.75)'; c.lineWidth = 0.035;
-      c.beginPath(); c.ellipse(hx, hy, r, r * 0.75, 0, Math.PI, 0); c.stroke();
-    }
-  }
-  drawMountain(c, x, y, i, snow) {
-    const mx = x + 0.5 + (tileHash(i, 100) - 0.5) * 0.3;
-    const base = y + 0.95;
-    const h = (snow ? 1.25 : 0.95) + tileHash(i, 101) * 0.3;
-    const wdt = 0.62 + tileHash(i, 102) * 0.2;
-    c.fillStyle = 'rgba(50,40,25,0.25)';
-    c.beginPath(); c.ellipse(mx + 0.1, base, wdt, 0.15, 0, 0, TAU); c.fill();
-    c.fillStyle = '#b9ac93';
-    c.beginPath(); c.moveTo(mx - wdt, base); c.lineTo(mx, base - h); c.lineTo(mx + wdt, base); c.closePath(); c.fill();
-    c.fillStyle = '#857762';
-    c.beginPath(); c.moveTo(mx, base - h); c.lineTo(mx + wdt, base); c.lineTo(mx + 0.05, base); c.closePath(); c.fill();
-    if (snow || h > 1.15) {
-      c.fillStyle = '#f4f2ec';
-      c.beginPath(); c.moveTo(mx - wdt * 0.36, base - h * 0.64); c.lineTo(mx, base - h); c.lineTo(mx + wdt * 0.36, base - h * 0.64);
-      c.lineTo(mx + 0.08, base - h * 0.72); c.lineTo(mx - 0.08, base - h * 0.6); c.closePath(); c.fill();
-    }
-    c.strokeStyle = '#4e4436'; c.lineWidth = 0.04;
-    c.beginPath(); c.moveTo(mx - wdt, base); c.lineTo(mx, base - h); c.lineTo(mx + wdt, base); c.stroke();
-  }
-  drawTuft(c, x, y, i) {
-    const tx = x + 0.2 + tileHash(i, 31) * 0.6, ty = y + 0.3 + tileHash(i, 32) * 0.5;
-    c.strokeStyle = 'rgba(80,95,40,0.55)'; c.lineWidth = 0.035;
-    c.beginPath();
-    c.moveTo(tx - 0.1, ty); c.lineTo(tx - 0.13, ty - 0.14);
-    c.moveTo(tx, ty); c.lineTo(tx, ty - 0.18);
-    c.moveTo(tx + 0.1, ty); c.lineTo(tx + 0.14, ty - 0.13);
-    c.stroke();
-  }
-
+  // Два разрешения кусков: 32 px на клетку издалека и 64 px вблизи на плотных экранах.
+  // Пока нужный кусок не запечён, показываем кусок другого разрешения, если он есть.
   getChunk(cx, cy, budget) {
-    const key = cx + ',' + cy;
+    const tp = this.cam.z * this.dpr > 44 ? TP * 2 : TP;
+    const key = cx + ',' + cy + ',' + tp;
     let ch = this.chunks.get(key);
     if (ch) { ch.used = this.frame; return ch.cv; }
-    if (budget.n <= 0) return null;
+    if (budget.n <= 0) {
+      const alt = this.chunks.get(cx + ',' + cy + ',' + (tp === TP ? TP * 2 : TP));
+      if (alt) { alt.used = this.frame; return alt.cv; }
+      return null;
+    }
     budget.n--;
-    ch = { cv: this.bakeChunk(cx, cy), used: this.frame };
+    ch = { cv: this.bakeChunk(cx, cy, tp), used: this.frame, cost: tp === TP ? 1 : 4 };
     this.chunks.set(key, ch);
-    if (this.chunks.size > 70) {
+    // память: кусок 64 px весит как четыре по 32 px
+    let total = 0;
+    for (const v of this.chunks.values()) total += v.cost || 1;
+    while (total > 72) {
       let oldK = null, oldT = Infinity;
-      for (const [k, v] of this.chunks) if (v.used < oldT) { oldT = v.used; oldK = k; }
+      for (const [k, v] of this.chunks) if (v.used < oldT && v.used < this.frame) { oldT = v.used; oldK = k; }
+      if (oldK === null) break;
+      total -= this.chunks.get(oldK).cost || 1;
       this.chunks.delete(oldK);
     }
     return ch.cv;
@@ -739,84 +624,42 @@ class Renderer {
   cityRadius(c) { return 0.5 + c.level * 0.12; }
 
   drawCities(ctx, z, tl, br) {
-    const g = this.g;
+    const g = this.g, list = [];
     for (const c of g.cities) {
       const x = c.x + 0.5, y = c.y + 0.5;
       if (x < tl.x - 3 || x > br.x + 3 || y < tl.y - 3 || y > br.y + 3) continue;
       if (!g.explored[g.cityTile(c)]) continue;
-      this.drawCity(ctx, c, x, y);
+      list.push(c);
     }
+    list.sort((p, q) => p.y - q.y || p.x - q.x);
+    WorldArt.beginCities(this);
+    for (const c of list) this.drawCity(ctx, c, c.x + 0.5, c.y + 0.5);
   }
 
+  // Город — готовый спрайт из WorldArt (дома, стены, башни, окрестности); поверх — живой стяг владельца.
   drawCity(ctx, c, x, y) {
-    const g = this.g;
-    const R = this.cityRadius(c);
+    const g = this.g, z = this.cam.z;
     const k = g.kingdom(c.owner);
     const col = k ? k.color : NEUTRAL_COLOR;
-    ctx.fillStyle = 'rgba(40,25,10,0.3)';
-    ctx.beginPath(); ctx.ellipse(x + 0.08, y + 0.12, R * 1.08, R * 0.9, 0, 0, TAU); ctx.fill();
-    ctx.fillStyle = '#cdb88b';
-    ctx.beginPath(); ctx.arc(x, y, R, 0, TAU); ctx.fill();
-    ctx.strokeStyle = 'rgba(80,55,25,0.6)'; ctx.lineWidth = 0.035;
-    ctx.stroke();
-    // дома
-    const n = Math.min(14, 3 + c.level * 2);
-    for (let h = 0; h < n; h++) {
-      const a = tileHash(c.id, 200 + h) * TAU, r = Math.sqrt(tileHash(c.id, 300 + h)) * R * 0.72;
-      const hx = x + Math.cos(a) * r, hy = y + Math.sin(a) * r * 0.85;
-      if (c.isCapital && Math.hypot(hx - x, hy - y) < 0.22) continue;
-      const s = 0.14 + tileHash(c.id, 400 + h) * 0.06;
-      ctx.fillStyle = '#e9dcc0';
-      ctx.fillRect(hx - s / 2, hy - s * 0.3, s, s * 0.7);
-      ctx.fillStyle = tileHash(c.id, 500 + h) < 0.5 ? '#9a4630' : '#7a4a2a';
-      ctx.beginPath(); ctx.moveTo(hx - s * 0.62, hy - s * 0.25); ctx.lineTo(hx, hy - s * 0.85); ctx.lineTo(hx + s * 0.62, hy - s * 0.25); ctx.closePath(); ctx.fill();
-      ctx.strokeStyle = 'rgba(50,30,15,0.7)'; ctx.lineWidth = 0.02;
-      ctx.strokeRect(hx - s / 2, hy - s * 0.3, s, s * 0.7);
-    }
-    // стены и башни
-    if (c.walls > 0) {
-      const max = WALLS[c.walls].hp;
-      const broken = c.wallHp <= 0, damaged = c.wallHp < max * 0.5;
-      const stone = c.walls >= 2;
-      ctx.strokeStyle = 'rgba(30,20,10,0.8)';
-      ctx.lineWidth = 0.09 + c.walls * 0.04;
-      if (broken) ctx.setLineDash([0.22, 0.28]); else if (damaged) ctx.setLineDash([0.6, 0.12]);
-      ctx.beginPath(); ctx.arc(x, y, R * 1.02, 0, TAU); ctx.stroke();
-      ctx.strokeStyle = stone ? (c.walls === 3 ? '#b4b0a6' : '#9b968c') : '#86603a';
-      ctx.lineWidth = 0.05 + c.walls * 0.04;
-      ctx.stroke();
-      ctx.setLineDash([]);
-      if (c.towers > 0) {
-        const nt = 2 + c.towers * 2;
-        for (let t = 0; t < nt; t++) {
-          const a = t / nt * TAU + 0.4;
-          const tx = x + Math.cos(a) * R * 1.02, ty = y + Math.sin(a) * R * 1.02;
-          ctx.fillStyle = stone ? '#a9a49a' : '#8e6a42';
-          ctx.beginPath(); ctx.arc(tx, ty, 0.07 + c.towers * 0.025, 0, TAU); ctx.fill();
-          ctx.strokeStyle = '#2d241a'; ctx.lineWidth = 0.025; ctx.stroke();
-        }
-      }
-    }
-    // замок столицы
-    if (c.isCapital) {
-      ctx.fillStyle = '#bdb6a6';
-      ctx.fillRect(x - 0.17, y - 0.3, 0.34, 0.38);
-      ctx.fillStyle = '#8f887a';
-      for (let t = 0; t < 3; t++) ctx.fillRect(x - 0.17 + t * 0.13, y - 0.38, 0.08, 0.09);
-      ctx.strokeStyle = '#2d241a'; ctx.lineWidth = 0.025; ctx.strokeRect(x - 0.17, y - 0.3, 0.34, 0.38);
-    }
-    // знамя
-    const px = x + R * 0.55, py = y - R * 0.5;
-    ctx.strokeStyle = '#3a2a18'; ctx.lineWidth = 0.035;
-    ctx.beginPath(); ctx.moveTo(px, py + 0.1); ctx.lineTo(px, py - 0.62); ctx.stroke();
-    const wave = Math.sin(this.time * 3 + c.id) * 0.03;
+    const s = WorldArt.citySprite(this, c, z * this.dpr);
+    ctx.drawImage(s.cv, x + s.x0, y + s.y0, s.w, s.h);
+    // стяг
+    const f = s.flag, sc = f.s * (z < 14 ? 1.3 : 1);
+    const px = x + f.x, py = y + f.y, L = 0.36 * sc, fw = 0.34 * sc, fh = 0.22 * sc;
+    ctx.strokeStyle = '#3a2a18'; ctx.lineWidth = Math.max(0.03, 1.4 / z);
+    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py - L - fh); ctx.stroke();
+    const wave = Math.sin(this.time * 3 + c.id) * 0.03 * sc;
+    const fy = py - L - fh;
     ctx.fillStyle = col;
     ctx.beginPath();
-    ctx.moveTo(px, py - 0.62); ctx.lineTo(px + 0.42, py - 0.6 + wave); ctx.lineTo(px + 0.36, py - 0.46); ctx.lineTo(px + 0.42, py - 0.32 + wave); ctx.lineTo(px, py - 0.34);
+    ctx.moveTo(px, fy); ctx.quadraticCurveTo(px + fw * 0.5, fy - wave, px + fw, fy + wave);
+    ctx.lineTo(px + fw * 0.82, fy + fh * 0.5); ctx.lineTo(px + fw, fy + fh + wave);
+    ctx.quadraticCurveTo(px + fw * 0.5, fy + fh - wave, px, fy + fh);
     ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = 'rgba(20,12,5,0.7)'; ctx.lineWidth = 0.02; ctx.stroke();
-    if (k) Icons.draw(ctx, k.sigil, px + 0.17, py - 0.48, 0.2, '#f6ecd2');
+    ctx.strokeStyle = 'rgba(42,27,13,0.85)'; ctx.lineWidth = Math.max(0.018, 1 / z); ctx.stroke();
+    if (k && z >= 14) Icons.draw(ctx, k.sigil, px + fw * 0.42, fy + fh * 0.5, fh * 0.85, '#f6ecd2');
     // осада: дым и огонь
+    const R = this.cityRadius(c);
     if (c.siegeBy && Math.random() < 0.3) this.spawn('smoke', x + (Math.random() - 0.5) * R, y - R * 0.3);
     if (c.siegeBy && c.wallHp <= 0 && Math.random() < 0.2) this.spawn('fire', x + (Math.random() - 0.5) * R, y + (Math.random() - 0.5) * R * 0.6);
   }
@@ -864,7 +707,7 @@ class Renderer {
       const x = c.x + 0.5, y = c.y + 0.5;
       if (x < tl.x - 3 || x > br.x + 3 || y < tl.y - 3 || y > br.y + 3) continue;
       if (!g.explored[g.cityTile(c)]) continue;
-      const s = this.toScreen(x, y + this.cityRadius(c) + 0.15);
+      const s = this.toScreen(x, y + this.cityRadius(c) * 0.8 + 0.22);
       const k = g.kingdom(c.owner);
       const name = c.name;
       ctx.font = `700 ${small ? 11 : 13}px "PT Sans Narrow", "Arial Narrow", sans-serif`;
@@ -896,7 +739,7 @@ class Renderer {
         ctx.beginPath(); ctx.arc(hp.x, hp.y, 10, -Math.PI / 2, -Math.PI / 2 + f * TAU); ctx.stroke();
       }
       if (c.walls > 0 && c.wallHp < WALLS[c.walls].hp && g.explored[g.cityTile(c)]) {
-        const wb = this.toScreen(x, y - this.cityRadius(c) - 0.3);
+        const wb = this.toScreen(x, y - this.cityRadius(c) * 0.8 - 1.05);
         const f = c.wallHp / WALLS[c.walls].hp;
         ctx.fillStyle = 'rgba(30,20,10,0.75)'; ctx.fillRect(wb.x - 20, wb.y - 3, 40, 5);
         ctx.fillStyle = f > 0 ? '#c9c2b2' : '#b33'; ctx.fillRect(wb.x - 19, wb.y - 2, 38 * f, 3);
