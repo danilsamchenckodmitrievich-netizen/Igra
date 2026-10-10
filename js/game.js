@@ -232,13 +232,13 @@ class Game {
 
   // ---------- влияние и земли ----------
   // Сила влияния города — на сколько клеток он держит землю. Вклады в клетках (enemies ≤ 0),
-  // reach = их сумма в пределах INFLUENCE.min…max. Вольные города: размер и гарнизон, армий у них нет.
+  // reach = их сумма в пределах INFLUENCE.min…max. Вольные города: только база (чуть выше) и гарнизон.
   cityInfluence(c) {
-    const I = INFLUENCE;
-    const out = { reach: 0, base: I.base[c.level] || I.base[1], pop: 0, garrison: 0, armies: 0, enemies: 0 };
-    out.pop = I.pop * Math.sqrt(Math.max(0, c.pop) / 400);
+    const I = INFLUENCE, free = c.owner === -1;
+    const out = { reach: 0, base: (I.base[c.level] || I.base[1]) + (free ? I.freeBase[c.level] || 0 : 0), pop: 0, garrison: 0, armies: 0, enemies: 0 };
     out.garrison = Math.min(I.garrisonMax, I.garrison * Math.sqrt(menCount(c.garrison) / 10));
-    if (c.owner !== -1) {
+    if (!free) {
+      out.pop = I.pop * Math.sqrt(Math.max(0, c.pop) / 400);
       const cx = c.x + 0.5, cy = c.y + 0.5;
       let own = 0, foe = 0;
       for (const a of this.armies) {

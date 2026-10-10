@@ -378,20 +378,51 @@ class World {
     const INF = Infinity;   // в горячем цикле — без поиска по глобальному объекту
     pot.fill(INF); own.fill(-1); lock.fill(-1);
     const rs = new Float32Array(cities.length), es = new Float32Array(cities.length);
-    const heap = this.inflHeap || (this.inflHeap = new MinHeap());
-    heap.clear();
+    // своя двоичная куча на типизированных массивах: в горячем цикле заметно быстрее общей MinHeap
+    let hi = this.inflHeapI || new Int32Array(4096), hp = this.inflHeapP || new Float64Array(4096), hn = 0;
+    const push = (item, pr) => {
+      if (hn === hi.length) {
+        const a = new Int32Array(hn * 2), b = new Float64Array(hn * 2);
+        a.set(hi); b.set(hp); hi = a; hp = b;
+      }
+      let i = hn++;
+      while (i > 0) {
+        const par = (i - 1) >> 1;
+        if (hp[par] <= pr) break;
+        hi[i] = hi[par]; hp[i] = hp[par];
+        i = par;
+      }
+      hi[i] = item; hp[i] = pr;
+    };
+    const pop = () => {
+      const top = hi[0];
+      if (--hn > 0) {
+        const li = hi[hn], lp = hp[hn];
+        let i = 0;
+        for (;;) {
+          let c = 2 * i + 1;
+          if (c >= hn) break;
+          if (c + 1 < hn && hp[c + 1] < hp[c]) c++;
+          if (hp[c] >= lp) break;
+          hi[i] = hi[c]; hp[i] = hp[c];
+          i = c;
+        }
+        hi[i] = li; hp[i] = lp;
+      }
+      return top;
+    };
     cities.forEach((c, ci) => {
       const r = reach && reach.has(c.id) ? reach.get(c.id) : CITY_LEVELS[c.level].radius + 0.5;
       const i = this.idx(c.x, c.y);
       rs[ci] = r;
       es[ci] = Math.min(1, r / 4.5);   // у слабого города и край колеблется меньше
       lock[i] = ci;   // клетка самого города всегда его, как бы ни давили соседи
-      if (-r < pot[i]) { pot[i] = -r; own[i] = ci; heap.push(i, -r); }
+      if (-r < pot[i]) { pot[i] = -r; own[i] = ci; push(i, -r); }
     });
     // 16 направлений (с ходами «конём»): владения выходят круглыми, а не восьмиугольными
     const D = INFL_MOVES;
-    while (heap.size) {
-      const pk = heap.pri[0], k = heap.pop();
+    while (hn > 0) {
+      const pk = hp[0], k = pop();
       const p = pot[k];
       if (pk > p) continue;   // устаревшая запись: клетку уже взяли дешевле
       const ci = own[k], e = es[ci];
@@ -413,9 +444,10 @@ class World {
         }
         if (np >= pot[j] || edge[j] * e - np <= 0) continue;
         pot[j] = np; own[j] = ci;
-        heap.push(j, np);
+        push(j, np);
       }
     }
+    this.inflHeapI = hi; this.inflHeapP = hp;
     // дырки в одну клетку (шум края) заделываем: вся суша вокруг — одного города
     for (let i = 0; i < n; i++) {
       if (own[i] >= 0 || step[i] === INF) continue;
