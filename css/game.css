@@ -221,7 +221,7 @@ button:focus-visible { outline: 2px solid var(--gold-hi); outline-offset: 2px; }
 #panel.stuck .tabs { padding-right: 56px; }
 #panel.stuck .ctabs .ico { display: none; }
 /* точка «идёт стройка» в углу ярлычка, чтобы не отнимать место у названия */
-.tabs .dot { position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 0 2px rgba(215, 169, 68, 0.3); }
+.tabs .dot { position: absolute; top: 9px; right: 7px; width: 8px; height: 8px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 0 2px rgba(215, 169, 68, 0.3); }
 .tabs .badge {
   min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: #8a5a2e; color: #fff6dc;
   font-family: var(--font-ui); font-size: 13px; font-weight: 700; display: inline-grid; place-items: center;
