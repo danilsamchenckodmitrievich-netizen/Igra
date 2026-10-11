@@ -17,12 +17,12 @@ const NAVAL = {
   offerGain: 20,        // …и выигрыш не меньше стольких секунд
   ships: {
     transport: {
-      name: 'Транспорт', short: 'Трансп.', icon: 'ship', need: 1, cap: 120, hp: 90, speed: 2.2, atk: 0, range: 0, vision: 5,
+      name: 'Транспорт', short: 'Трансп.', icon: 'ship', need: 1, cap: 120, hp: 140, speed: 2.2, atk: 0, range: 0, vision: 5,
       cost: { gold: 110, wood: 170 }, time: 18, crew: 15, upkeep: 1.5,
       desc: 'Везёт армию до 120 воинов к любому берегу. Сам не сражается и уязвим для боевых ладей.',
     },
     galley: {
-      name: 'Боевая ладья', short: 'Ладья', icon: 'ship', need: 2, cap: 0, hp: 150, speed: 2.5, atk: 11, range: 3.6, vision: 6.5,
+      name: 'Боевая ладья', short: 'Ладья', icon: 'ship', need: 2, cap: 0, hp: 150, speed: 2.5, atk: 9, range: 3.6, vision: 6.5,
       cost: { gold: 170, wood: 200, iron: 25 }, time: 26, crew: 30, upkeep: 3,
       desc: 'Топит чужие корабли и прикрывает свои транспорты. Для постройки нужна верфь (порт 2 ур.).',
     },
@@ -634,7 +634,7 @@ const Naval = (() => {
         if (d < bd) { bd = d; tgt = b; }
       }
       if (!tgt) { a.shoot = null; continue; }
-      tgt.hp -= sp.atk * BATTLE_TICK * (tgt.kind === 'galley' ? 1 : 1.4);
+      tgt.hp -= sp.atk * BATTLE_TICK * (tgt.kind === 'galley' ? 1 : 1.25);
       tgt.hurt = g.time;
       a.shoot = { id: tgt.id, t: g.time };
       if (tgt.hp <= 0 && !dead.some(d => d[0] === tgt)) dead.push([tgt, a]);
