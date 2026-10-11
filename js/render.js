@@ -31,6 +31,8 @@ class Renderer {
     this.time = 0;
     this.particles = [];
     this.selected = null;
+    this.plateCache = new Map();
+    this.hl = null;          // Set id дивизий, выбранных рамкой или армией целиком (подсветка плашек)
     this.hover = null;
     this.marker = null;
     this.resize();
@@ -684,6 +686,19 @@ class Renderer {
         if (b.kind === 'field' && Math.random() < 0.12) this.spawn('dust', b.x + (Math.random() - 0.5) * 0.8, b.y + 0.15 + (Math.random() - 0.5) * 0.2);
         continue;
       }
+      // участники сражения: нити от места боя к каждой дивизии своего цвета
+      const sides = [b.sideA, b.sideB];
+      if (b.kind === 'field' && sides[0] && sides[0].length + sides[1].length > 2) {
+        ctx.lineWidth = 2 / z;
+        for (let si = 0; si < 2; si++) for (const id of sides[si]) {
+          const m = g.army(id);
+          if (!m) continue;
+          const km = g.kingdom(m.owner);
+          ctx.strokeStyle = km ? km.color : '#fff'; ctx.globalAlpha = 0.75;
+          ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(m.x, m.y); ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
       const p = 1 + Math.sin(this.time * 8) * 0.08;
       ctx.save();
       ctx.translate(b.x, b.y - (b.kind === 'siege' ? 0.9 : 0.6));
@@ -691,6 +706,12 @@ class Renderer {
       ctx.fillStyle = 'rgba(25,15,8,0.65)';
       ctx.beginPath(); ctx.arc(0, 0, 0.36, 0, TAU); ctx.fill();
       Icons.draw(ctx, 'swords', 0, 0, 0.5, '#ffe2a8');
+      const members = b.kind === 'field' && b.sideA ? b.sideA.length + b.sideB.length : b.sideA ? b.sideA.length : 0;
+      if (members > 2 || (b.kind === 'siege' && members > 1)) {
+        ctx.fillStyle = '#c9552f'; ctx.beginPath(); ctx.arc(0.3, 0.26, 0.17, 0, TAU); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.font = '700 0.24px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(String(members), 0.3, 0.34);
+      }
       ctx.restore();
       if (Math.random() < 0.35) this.spawn('dust', b.x + (Math.random() - 0.5) * 1.2, b.y + (Math.random() - 0.5) * 0.8);
     }
@@ -764,11 +785,28 @@ class Renderer {
     const list = g.armies.filter(a => this.armyVisible(a) && a.x > tl.x - 2 && a.x < br.x + 2 && a.y > tl.y - 2 && a.y < br.y + 2);
     list.sort((p, q) => p.y - q.y);
     this.drawnArmies = [];
-    // вблизи — строй фигурок с походным шагом и схваткой
-    if (z >= UnitArt.FORMATION_Z) { UnitArt.drawArmies(this, ctx, list); return; }
+    // вблизи — строй фигурок с походным шагом и схваткой, над ним плашка дивизии
+    if (z >= UnitArt.FORMATION_Z) {
+      const undo = this.pairBattles(list);
+      try { UnitArt.drawArmies(this, ctx, list); } finally { undo(); }
+      // плашки соседних дивизий не налезают друг на друга: передние остаются над строем, дальние поднимаются выше
+      const pz = this.plateSize(S), put = [], spots = [];
+      for (let i = this.drawnArmies.length - 1; i >= 0; i--) {
+        const d = this.drawnArmies[i];
+        const x = d.x; let y = d.y - Math.max(d.r, S * 0.62) - S * 0.42;
+        for (let k = 0; k < 5; k++) {
+          let hit = null;
+          for (const q of spots) if (Math.abs(q.x - x) < pz.W * 0.96 && Math.abs(q.y - y) < pz.H * 1.04) { hit = q; break; }
+          if (!hit) break;
+          y = hit.y - pz.H * 1.08;
+        }
+        spots.push({ x, y }); put[i] = y;
+      }
+      for (let i = 0; i < this.drawnArmies.length; i++) { const d = this.drawnArmies[i]; this.drawPlate(ctx, d.a, d.x, put[i], S, true); }
+      return;
+    }
     const placed = [];
     for (const a of list) {
-      const k = g.kingdom(a.owner);
       let ax = a.x, ay = a.y;
       // стоящая у города армия не закрывает сам город
       if (a.state !== 'move' && a.state !== 'retreat') {
@@ -776,27 +814,127 @@ class Renderer {
         if (c) { ax = c.x + 0.5 + this.cityRadius(c) + 0.55; ay = c.y + 0.75; }
       }
       const p = this.toScreen(ax, ay);
-      for (const q of placed) if (Math.abs(q.x - p.x) < S * 0.7 && Math.abs(q.y - p.y) < S * 0.7) p.x = q.x + S * 0.85;
+      const W = this.plateSize(S).W;
+      for (const q of placed) if (Math.abs(q.x - p.x) < W * 0.9 && Math.abs(q.y - p.y) < S * 0.5) p.y = q.y - S * 0.52;
       placed.push({ x: p.x, y: p.y });
       const bob = a.state === 'move' || a.state === 'retreat' ? Math.abs(Math.sin(this.time * 7 + a.id)) * 2.5 : 0;
-      const x = p.x, y = p.y - S * 0.55 - bob;
-      const sel = this.selected && this.selected.kind === 'army' && this.selected.id === a.id;
-      this.drawnArmies.push({ a, x, y, r: S * 0.62 });
-      ctx.fillStyle = 'rgba(30,18,8,0.35)';
-      ctx.beginPath(); ctx.ellipse(p.x, p.y, S * 0.42, S * 0.15, 0, 0, TAU); ctx.fill();
-      if (sel) {
-        ctx.strokeStyle = '#ffe28a'; ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.ellipse(p.x, p.y, S * 0.6, S * 0.24, 0, 0, TAU); ctx.stroke();
-      }
-      // щит с гербом и число воинов берутся из кэша
-      const t = UnitArt.token(k, S, sel, this.dpr);
-      ctx.drawImage(t.cv, x - S / 2 - t.ax / this.dpr, y - S / 2 - t.ay / this.dpr, t.w, t.h);
-      const men = menCount(a.units);
-      const pl = UnitArt.plate(men >= 1000 ? (men / 1000).toFixed(1) + 'к' : String(men), a.state === 'retreat', this.dpr);
-      ctx.drawImage(pl.cv, x - pl.w / 2, y + S * 0.42, pl.w, pl.h);
-      if (a.state === 'siege') Icons.draw(ctx, 'target', x + S * 0.5, y - S * 0.45, 12, '#ffcf7a');
-      if (a.state === 'retreat') Icons.draw(ctx, 'flag', x + S * 0.5, y - S * 0.45, 12, '#ffffff');
+      const x = p.x, y = p.y - S * 0.45 - bob;
+      this.drawnArmies.push({ a, x, y, r: W * 0.5 });
+      ctx.fillStyle = 'rgba(30,18,8,0.3)';
+      ctx.beginPath(); ctx.ellipse(p.x, p.y, S * 0.5, S * 0.14, 0, 0, TAU); ctx.fill();
+      this.drawPlate(ctx, a, x, y, S, false);
     }
+  }
+
+  // Плашка дивизии, как в HOI4: значок шаблона на цвете державы, число воинов, полоски численности и организованности.
+  // Основа (корпус, значок, рамка) и числа лежат в кэше спрайтов; каждый кадр рисуются только полоски.
+  plateSize(S) { return { W: Math.max(54, Math.round(S * 1.9)), H: Math.max(22, Math.round(S * 0.74)) }; }
+  plateBase(k, icon, gcol, flag, W, H) {
+    const dpr = this.dpr, key = k.color + k.dark + icon + (gcol || '-') + flag + W + 'x' + H + '@' + dpr;
+    let e = this.plateCache.get(key);
+    if (e) return e;
+    if (this.plateCache.size > 360) this.plateCache.clear();
+    const pad = 4, cv = document.createElement('canvas');
+    cv.width = Math.ceil((W + pad * 2) * dpr); cv.height = Math.ceil((H + pad * 2) * dpr);
+    const c = cv.getContext('2d');
+    c.scale(dpr, dpr); c.translate(pad, pad);
+    c.fillStyle = 'rgba(20,12,5,0.35)';
+    this.roundRect(c, 1, 2, W, H, 4); c.fill();
+    c.fillStyle = 'rgba(28,17,8,0.93)';
+    this.roundRect(c, 0, 0, W, H, 4); c.fill();
+    c.save();
+    this.roundRect(c, 0, 0, W, H, 4); c.clip();
+    c.fillStyle = k.color; c.fillRect(0, 0, H, H);
+    c.fillStyle = 'rgba(0,0,0,0.22)'; c.fillRect(H - 3, 0, 3, H);
+    if (gcol) { c.fillStyle = gcol; c.fillRect(H, 0, W - H, 2.5); }
+    c.restore();
+    Icons.draw(c, icon, H / 2, H / 2, H * 0.66, '#fff6dc');
+    // рамка: выбранная — золотая, выделенная рамкой — светлая пунктирная, обычная — цвета державы
+    c.lineWidth = flag === 1 ? 2.5 : 1.5;
+    c.strokeStyle = flag === 1 ? '#ffe28a' : flag === 2 ? '#fff3c8' : k.dark;
+    if (flag === 2) c.setLineDash([4, 3]);
+    this.roundRect(c, 0, 0, W, H, 4); c.stroke();
+    e = { cv, pad, w: cv.width / dpr, h: cv.height / dpr };
+    this.plateCache.set(key, e);
+    return e;
+  }
+  plateNum(txt, color, px) {
+    const dpr = this.dpr, key = 'n' + txt + color + px + '@' + dpr;
+    let e = this.plateCache.get(key);
+    if (e) return e;
+    const font = '700 ' + px + 'px "PT Sans Narrow", "Arial Narrow", sans-serif';
+    const m = this.ctx;
+    m.save(); m.font = font; const tw = Math.ceil(m.measureText(txt).width) + 2; m.restore();
+    const cv = document.createElement('canvas');
+    cv.width = Math.ceil(tw * dpr); cv.height = Math.ceil((px + 3) * dpr);
+    const c = cv.getContext('2d');
+    c.scale(dpr, dpr); c.font = font; c.textAlign = 'right'; c.fillStyle = color;
+    c.fillText(txt, tw - 1, px);
+    e = { cv, w: tw, h: px + 3 };
+    this.plateCache.set(key, e);
+    return e;
+  }
+  drawPlate(ctx, a, cx, cy, S, near) {
+    const g = this.g, k = g.kingdom(a.owner), t = Fronts.tpl(g, a.owner, a.tpl);
+    const { W, H } = this.plateSize(S), x = Math.round(cx - W / 2), y = Math.round(cy - H / 2), dpr = this.dpr;
+    const sel = this.selected && this.selected.kind === 'army' && this.selected.id === a.id;
+    const flag = sel ? 1 : this.hl && this.hl.has(a.id) ? 2 : 0;
+    const men = menCount(a.units), full = Math.max(men, t ? menCount(t.units) : men);
+    const org = (a.org === undefined ? 100 : a.org) / 100;
+    const grp = a.group !== null && a.group !== undefined ? Fronts.group(g, a.group) : null;
+    const e = this.plateBase(k, Fronts.icon(g, a), grp ? grp.color : null, flag, W, H);
+    ctx.drawImage(e.cv, x - e.pad, y - e.pad + 1, e.w, e.h);
+    const fpx = Math.round(Math.max(10, H * 0.42));
+    const ns = this.plateNum(men >= 1000 ? (men / 1000).toFixed(1) + 'к' : String(men), a.state === 'retreat' ? '#ffb0a0' : '#fff3d6', fpx);
+    ctx.drawImage(ns.cv, x + W - 3 - ns.w + 1, y + 3 + (grp ? 1 : 0), ns.w, ns.h);
+    const bx = x + H + 3, bw = W - H - 7, bh = Math.max(3, Math.round(H * 0.14)), by = y + H - bh * 2 - 4;
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.fillRect(bx, by, bw, bh); ctx.fillRect(bx, by + bh + 1, bw, bh);
+    ctx.fillStyle = '#e9c264'; ctx.fillRect(bx, by, Math.round(bw * Math.min(1, men / full)), bh);
+    ctx.fillStyle = org > 0.6 ? '#79b743' : org > 0.3 ? '#e0a63a' : '#d4492b';
+    ctx.fillRect(bx, by + bh + 1, Math.round(bw * org), bh);
+    // состояние
+    const st = a.state;
+    if (st === 'siege') Icons.draw(ctx, 'target', x + W, y, 13, '#ffcf7a');
+    else if (st === 'retreat') Icons.draw(ctx, 'flag', x + W, y, 13, '#ffffff');
+    else if (st === 'battle') Icons.draw(ctx, 'swords', x + W, y, 13, '#ff9a7a');
+    else if ((a.entrench || 0) > 0.5) Icons.draw(ctx, 'shield', x + W, y, 11, '#cfe2a8');
+  }
+
+  // Многодивизионные бои вблизи: art-units.js рисует схватку двух ведущих дивизий; остальные участники
+  // на время кадра разбиваются на пары с ближайшим противником и подаются как отдельные сражения.
+  // Возвращает функцию, которая всё возвращает как было.
+  pairBattles(list) {
+    const g = this.g, saved = [], added = [], vis = new Set(list);
+    for (const b of g.battles) {
+      if (b.kind !== 'field' || !b.sideA || b.sideA.length + b.sideB.length <= 2) continue;
+      const A = [], B = [];
+      for (const id of b.sideA) { const m = g.army(id); if (m && m.id !== b.a && vis.has(m)) A.push(m); }
+      for (const id of b.sideB) { const m = g.army(id); if (m && m.id !== b.b && vis.has(m)) B.push(m); }
+      const freeB = B.slice();
+      for (const m of A) {
+        let bi = -1, bd = Infinity;
+        for (let i = 0; i < freeB.length; i++) { const d = dist(m.x, m.y, freeB[i].x, freeB[i].y); if (d < bd) { bd = d; bi = i; } }
+        if (bi < 0) continue;
+        const e = freeB.splice(bi, 1)[0];
+        const v = {
+          id: -m.id - 1, kind: 'field', a: m.id, b: e.id, sideA: [m.id], sideB: [e.id], x: (m.x + e.x) / 2, y: (m.y + e.y) / 2, t: b.t,
+          startA: (b.men && b.men[m.id]) || menCount(m.units), startB: (b.men && b.men[e.id]) || menCount(e.units),
+          lossA: (b.loss && b.loss[m.id]) || 0, lossB: (b.loss && b.loss[e.id]) || 0,
+        };
+        saved.push([m, m.battleId], [e, e.battleId]);
+        m.battleId = e.battleId = v.id;
+        g.battles.push(v); added.push(v);
+        m._paired = e._paired = true;
+      }
+      // без пары — стоят строем рядом с местом боя
+      for (const m of A.concat(B)) if (!m._paired) { saved.push([m, m.battleId]); m.battleId = null; }
+      for (const m of A.concat(B)) m._paired = false;
+    }
+    return () => {
+      for (const [m, id] of saved) m.battleId = id;
+      for (const v of added) { const i = g.battles.lastIndexOf(v); if (i >= 0) g.battles.splice(i, 1); }
+    };
   }
 
   drawMarker(ctx, dt) {

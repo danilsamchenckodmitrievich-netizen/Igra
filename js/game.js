@@ -501,17 +501,23 @@ class Game {
     return { total: Mods.mod('income', this, total, k, parts), parts };
   }
 
-  // ---------- армии ----------
+  // ---------- армии (дивизии) ----------
+  // Каждая армия в g.armies — дивизия: org — организованность (боевая устойчивость), xp — опыт,
+  // entrench — окапывание 0..1, tpl — шаблон, front — фронт, group — армия из дивизий (js/fronts.js).
   makeArmy(owner, x, y, units) {
     const a = {
       id: this.newId(), owner, x, y, units: { ...units }, wounds: {}, path: null, pathI: 0, dest: null,
-      state: 'idle', morale: 100, battleId: null, name: '', immuneUntil: 0, lastRepath: 0, siegeCity: null,
+      state: 'idle', org: 100, xp: 0, entrench: 0, tpl: null, front: null, group: null,
+      battleId: null, name: '', immuneUntil: 0, lastRepath: 0, siegeCity: null,
     };
     this.armies.push(a);
     this.armyById.set(a.id, a);
     return a;
   }
   removeArmy(a) {
+    // выбывший участник не должен оставлять за собой висящих осад и сражений
+    if (a.state === 'siege' && a.siegeCity) this.leaveSiege(a);
+    else if (a.battleId) this.leaveBattle(a);
     const i = this.armies.indexOf(a);
     if (i >= 0) this.armies.splice(i, 1);
     this.armyById.delete(a.id);
@@ -530,8 +536,8 @@ class Game {
     return Mods.mod('vision', this, a.units.scout ? UNITS.scout.vision : COMBAT.armyVision, a);
   }
 
-  // Вывести войска из гарнизона в поле.
-  formArmy(c, units) {
+  // Вывести войска из гарнизона в поле: получается дивизия (шаблон tplId или угаданный по составу).
+  formArmy(c, units, tplId) {
     const take = {};
     for (const u in units) {
       const n = Math.min(units[u], c.garrison[u] || 0);
@@ -541,13 +547,13 @@ class Game {
     addUnits(c.garrison, take, -1);
     for (const u in take) if (!c.garrison[u]) delete c.wounds[u];
     const a = this.makeArmy(c.owner, c.x + 0.5, c.y + 0.5, take);
-    a.name = this.armyName(c.owner);
+    a.tpl = tplId || Fronts.guessTpl(this, c.owner, take);
+    a.name = Fronts.divName(this, c.owner, a.tpl);
     return a;
   }
+  // Имя армии (группы дивизий): «Первая армия», «Вторая армия»…
   armyName(owner) {
-    const n = this.armies.filter(a => a.owner === owner).length;
-    const ord = ['Первая', 'Вторая', 'Третья', 'Четвёртая', 'Пятая', 'Шестая', 'Седьмая', 'Восьмая', 'Девятая', 'Десятая'];
-    return (ord[n] || (n + 1) + '-я') + ' армия';
+    return Fronts.ordWord(Fronts.groupsOf(this, owner).length + 1) + ' армия';
   }
   splitArmy(a, units) {
     if (a.state === 'battle') return null;
@@ -559,14 +565,19 @@ class Game {
     if (!menCount(take) || menCount(take) >= menCount(a.units)) return null;
     addUnits(a.units, take, -1);
     const b = this.makeArmy(a.owner, a.x + 0.35, a.y + 0.35, take);
-    b.name = this.armyName(a.owner);
-    b.morale = a.morale;
+    b.tpl = Fronts.guessTpl(this, a.owner, take);
+    a.tpl = Fronts.guessTpl(this, a.owner, a.units);
+    b.name = Fronts.divName(this, a.owner, b.tpl);
+    b.org = a.org; b.xp = a.xp; b.group = a.group; b.front = a.front;
     return b;
   }
+  // Слить дивизию b в a (вручную: дивизии сами больше не сливаются).
   mergeInto(a, b) {
-    // b вливается в a
+    const ma = menCount(a.units), mb = menCount(b.units);
     addUnits(a.units, b.units);
-    a.morale = Math.min(100, (a.morale * menCount(a.units) + b.morale * menCount(b.units)) / Math.max(1, menCount(a.units) + menCount(b.units)) + 5);
+    a.org = Math.min(100, (a.org * ma + b.org * mb) / Math.max(1, ma + mb));
+    a.xp = ((a.xp || 0) * ma + (b.xp || 0) * mb) / Math.max(1, ma + mb);
+    a.tpl = Fronts.guessTpl(this, a.owner, a.units);
     this.removeArmy(b);
   }
   garrisonArmy(a, c) {
@@ -583,26 +594,30 @@ class Game {
   }
   // Приказ: идти в точку / к городу / на армию.
   order(a, target) {
-    if (!a || a.state === 'battle') return 'Армия в бою';
-    if (a.state === 'retreat') return 'Армия отступает';
+    if (!a || a.state === 'battle') return 'Дивизия в бою';
+    if (a.state === 'retreat') return 'Дивизия отходит';
     // на державу, с которой мир или союз, не нападают: сперва нужно объявить войну (дипломатия)
     const foe = target.kind === 'city' ? (this.city(target.id) || {}).owner : target.kind === 'army' && this.army(target.id) ? this.army(target.id).owner : undefined;
     if (foe !== undefined && foe !== a.owner && !this.isHostile(a.owner, foe)) { this.emit('peaceBlock', { army: a, owner: foe, target }); return 'С этой державой мир. Объявить войну?'; }
-    if (a.state === 'siege') this.endSiege(a, false);
     let tx, ty;
     if (target.kind === 'city') { const c = this.city(target.id); tx = c.x + 0.5; ty = c.y + 0.5; }
     else if (target.kind === 'army') { const t = this.army(target.id); if (!t) return 'Цель исчезла'; tx = t.x; ty = t.y; }
     else { tx = target.x; ty = target.y; }
+    // та же осада — не прерываем
+    if (a.state === 'siege' && target.kind === 'city' && a.siegeCity === target.id) return null;
+    if (a.state === 'siege') this.endSiege(a, false);
     if (!this.setPath(a, tx, ty)) return 'Туда не пройти';
     a.dest = { ...target };
     a.state = 'move';
     a.lastRepath = this.time;
+    // в свой город дивизия входит гарнизоном, только если её туда и послали
+    a.enter = target.kind === 'city' && this.city(target.id).owner === a.owner;
     return null;
   }
   stop(a) {
     if (a.state === 'siege') this.endSiege(a, false);
     if (a.state === 'move') a.state = 'idle';
-    a.path = null; a.dest = null;
+    a.path = null; a.dest = null; a.march = false;
   }
 
   updateArmies(dt) {
@@ -614,14 +629,15 @@ class Game {
       // погоня: путь к движущейся цели пересчитываем
       if (a.dest && a.dest.kind === 'army') {
         const t = this.army(a.dest.id);
-        if (!t) { a.dest = null; a.path = null; a.state = 'idle'; continue; }
+        if (!t) { a.dest = null; a.path = null; if (a.state === 'move') a.state = 'idle'; continue; }
         if (this.time - a.lastRepath > 1.5) {
           a.lastRepath = this.time;
           // путь пересчитываем, только если цель ушла от его конца
           const end = a.path && a.path[a.path.length - 1];
           if (!end || Math.abs(end.x - t.x) + Math.abs(end.y - t.y) > 1) this.setPath(a, t.x, t.y);
         }
-        if (t.owner === a.owner && dist(a.x, a.y, t.x, t.y) < 0.8 && t.state !== 'battle') { this.mergeInto(t, a); continue; }
+        // к своей дивизии — просто подходим и встаём рядом
+        if (t.owner === a.owner && dist(a.x, a.y, t.x, t.y) < 0.9) { a.path = null; a.dest = null; a.state = 'idle'; continue; }
       }
       if (a.path) {
         let budget = this.armySpeed(a) * dt * (a.state === 'retreat' ? 1.15 : 1);
@@ -651,13 +667,11 @@ class Game {
     const d = a.dest;
     if (a.state === 'retreat') { a.state = 'idle'; a.dest = null; }
     else a.state = 'idle';
+    a.march = false;
     if (!d) return;
     if (d.kind === 'city') {
       const c = this.city(d.id);
       if (c) this.arriveCity(a, c);
-    } else if (d.kind === 'army') {
-      const t = this.army(d.id);
-      if (t && t.owner === a.owner && t.state !== 'battle') this.mergeInto(t, a);
     }
     if (this.armyById.has(a.id) && a.state === 'idle') a.dest = null;
   }
@@ -666,78 +680,101 @@ class Game {
     a.path = null;
     if (c.owner === a.owner) {
       if (a.isBandit) return;
-      this.garrisonArmy(a, c);
+      if (a.state === 'retreat' || a.enter) this.garrisonArmy(a, c);
+      else { a.state = 'idle'; a.dest = null; }
       return;
     }
     // отступавшие к уже потерянному городу ищут другое убежище, а не идут на штурм
     if (a.state === 'retreat') { this.retreat(a); return; }
-    // с хозяином города заключили мир, пока армия шла, — штурма не будет
+    // с хозяином города заключили мир, пока дивизия шла, — штурма не будет
     if (!this.isHostile(a.owner, c.owner)) { a.state = 'idle'; a.dest = null; return; }
-    // своя армия уже осаждает — присоединяемся
-    const ally = this.armies.find(o => o !== a && o.owner === a.owner && o.state === 'siege' && o.siegeCity === c.id);
-    if (ally) { this.mergeInto(ally, a); return; }
     this.startSiege(a, c);
   }
 
   // ---------- сражения ----------
+  // Полевой бой многодивизионный: у сражения две стороны (sideA/sideB — id дивизий, ownA/ownB — державы);
+  // a и b — ведущие дивизии сторон (для отрисовки и совместимости). men/loss — численность при вступлении
+  // и потери каждого участника.
+  battleOf(a) {
+    if (!a || !a.battleId) return null;
+    for (const b of this.battles) if (b.id === a.battleId) return b;
+    return null;
+  }
+  sideArmies(btl, side) {
+    const ids = side === 'a' ? btl.sideA : btl.sideB, out = [];
+    for (const id of ids) {
+      const x = this.army(id);
+      if (x && x.battleId === btl.id && (x.state === 'battle' || x.state === 'siege')) out.push(x);
+    }
+    return out;
+  }
+  // На чью сторону встанет держава owner в этом бою (или null — ни на чью).
+  sideFor(btl, owner) {
+    if (owner === btl.ownA) return 'a';
+    if (owner === btl.ownB) return 'b';
+    const hA = this.isHostile(owner, btl.ownA), hB = this.isHostile(owner, btl.ownB);
+    if (hA && !hB) return 'b';
+    if (hB && !hA) return 'a';
+    return null;
+  }
   startField(a, b) {
     const btl = {
-      id: this.newId(), kind: 'field', a: a.id, b: b.id, t: 0, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2,
-      startA: menCount(a.units), startB: menCount(b.units), lossA: 0, lossB: 0,
+      id: this.newId(), kind: 'field', a: a.id, b: b.id, sideA: [], sideB: [], ownA: a.owner, ownB: b.owner,
+      t: 0, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, startA: 0, startB: 0, lossA: 0, lossB: 0, men: {}, loss: {},
       defender: a.state === 'move' && b.state !== 'move' ? 'b' : b.state === 'move' && a.state !== 'move' ? 'a' : null,
     };
-    for (const x of [a, b]) {
-      if (x.state === 'siege') { x.resumeSiege = x.siegeCity; this.pauseSiege(x); }
-      x.prevState = x.state === 'move' ? 'move' : 'idle';
-      x.state = 'battle'; x.battleId = btl.id;
-    }
     this.battles.push(btl);
+    this.joinBattle(btl, a, 'a');
+    this.joinBattle(btl, b, 'b');
+    this.pullIn(btl);
     const pl = this.player;
-    if (pl && (a.owner === pl.id || b.owner === pl.id)) {
-      const mine = a.owner === pl.id ? a : b, foe = mine === a ? b : a;
+    if (pl && (btl.ownA === pl.id || btl.ownB === pl.id)) {
+      const mine = btl.ownA === pl.id ? a : b, foe = mine === a ? b : a;
       this.notify(mine.name + ' вступает в бой: ' + this.kingdom(foe.owner).name, 'war', btl, true);
       this.emit('battle', btl);
     }
   }
-
-  startSiege(a, c) {
-    if (c.siegeBy && c.siegeBy !== a.id) {
-      const other = this.army(c.siegeBy);
-      // город уже осаждает союзник или держава, с которой мир, — ждём рядом
-      if (other && other.owner !== a.owner && !this.isHostile(a.owner, other.owner)) { a.state = 'idle'; a.dest = null; return; }
-      if (other && other.owner !== a.owner && other.state !== 'battle') { this.startField(a, other); return; }
-      if (other && other.owner === a.owner) { this.mergeInto(other, a); return; }
-    }
-    a.state = 'siege'; a.siegeCity = c.id; a.dest = { kind: 'city', id: c.id };
-    c.siegeBy = a.id;
-    c.siegeT = 0;
-    const btl = {
-      id: this.newId(), kind: 'siege', a: a.id, city: c.id, t: 0, x: c.x + 0.5, y: c.y + 0.5,
-      startA: menCount(a.units), lossA: 0, lossB: 0,
-    };
-    a.battleId = btl.id;
-    this.battles.push(btl);
-    // горожане берутся за оружие один раз за осаду
-    if (!c.raised && c.owner !== -1) {
-      const n = Math.floor(c.pop * 0.05 / 10) * 10;
-      if (n > 0) { c.garrison.militia = (c.garrison.militia || 0) + n; c.pop -= n; }
-      c.raised = true;
-    }
-    const pl = this.player;
-    if (pl && c.owner === pl.id) this.notify('Враг осаждает ' + c.name + '!', 'bad', c, true);
-    else if (pl && a.owner === pl.id) this.notify(a.name + ' осаждает ' + c.name, 'war', c);
-    this.emit('siege', { army: a, city: c });
+  joinBattle(btl, x, side) {
+    if (x.state === 'siege') { x.resumeSiege = x.siegeCity; this.leaveSiege(x); }
+    x.prevState = x.state === 'move' ? 'move' : 'idle';
+    x.state = 'battle'; x.battleId = btl.id; x.march = false;
+    (side === 'a' ? btl.sideA : btl.sideB).push(x.id);
+    const m = menCount(x.units);
+    btl.men[x.id] = m; btl.loss[x.id] = 0;
+    if (side === 'a') btl.startA += m; else btl.startB += m;
   }
-  pauseSiege(a) {
-    const c = this.city(a.siegeCity);
-    if (c && c.siegeBy === a.id) c.siegeBy = null;
-    this.battles = this.battles.filter(b => !(b.kind === 'siege' && b.a === a.id));
+  // В бой втягиваются соседние дивизии обеих сторон (в радиусе DIV.join от любого участника).
+  pullIn(btl) {
+    const R = DIV.join, ids = btl.sideA.concat(btl.sideB);
+    for (const d of this.armies) {
+      if (d.state === 'battle' || d.state === 'retreat' || d.immuneUntil > this.time) continue;
+      if (Math.abs(d.x - btl.x) > R + 3 || Math.abs(d.y - btl.y) > R + 3) continue;
+      let near = false;
+      for (const id of ids) {
+        const p = this.army(id);
+        if (p && Math.abs(p.x - d.x) <= R && Math.abs(p.y - d.y) <= R && dist(p.x, p.y, d.x, d.y) <= R) { near = true; break; }
+      }
+      if (!near) continue;
+      const side = this.sideFor(btl, d.owner);
+      if (side) this.joinBattle(btl, d, side);
+    }
   }
-  endSiege(a, keepState) {
-    this.pauseSiege(a);
-    a.siegeCity = null;
-    if (!keepState) a.state = 'idle';
-    a.battleId = null;
+  // Убрать дивизию из сторон боя (ведущая заменяется следующей).
+  dropFromBattle(btl, d) {
+    btl.sideA = btl.sideA.filter(id => id !== d.id);
+    btl.sideB = btl.sideB.filter(id => id !== d.id);
+    if (btl.a === d.id && btl.sideA.length) btl.a = btl.sideA[0];
+    if (btl.b === d.id && btl.sideB.length) btl.b = btl.sideB[0];
+    d.battleId = null;
+  }
+  // Дивизия покидает бой вне хода сражения (удалена, ушла): если сторона опустела, бой заканчивается сразу.
+  leaveBattle(d) {
+    const btl = this.battleOf(d);
+    d.battleId = null;
+    if (!btl) return;
+    if (btl.kind === 'siege') { this.leaveSiege(d); return; }
+    this.dropFromBattle(btl, d);
+    if (!btl.sideA.length || !btl.sideB.length) this.finishField(btl, btl.sideA.length ? 'a' : btl.sideB.length ? 'b' : null);
   }
 
   // Урон, который отряды src наносят отрядам dst за тик.
@@ -779,9 +816,10 @@ class Game {
     }
     return killed;
   }
+  // Множитель урона дивизии: организованность, опыт, жалованье.
   moraleMult(a) {
     const k = this.kingdom(a.owner);
-    let m = 0.55 + a.morale / 220;
+    let m = (0.55 + (a.org === undefined ? 100 : a.org) / 220) * (1 + (a.xp || 0) / DIV.xpMax * DIV.xpAtk);
     if (k && (k.unpaid || k.starving)) m *= 0.85;
     return Mods.mod('attack', this, m, a);
   }
@@ -789,9 +827,41 @@ class Game {
     const i = this.world.tileAt(x, y);
     return i >= 0 ? TERRAIN[this.world.terrain[i]].def : 0;
   }
+  // Удар с нескольких сторон: чем шире охват противника, тем сильнее атакующие.
+  flankMult(S, E) {
+    if (S.length < 2 || !E.length) return 1;
+    let cx = 0, cy = 0;
+    for (const e of E) { cx += e.x; cy += e.y; }
+    cx /= E.length; cy /= E.length;
+    const ang = S.map(s => Math.atan2(s.y - cy, s.x - cx)).sort((p, q) => p - q);
+    let gap = ang[0] + TAU - ang[ang.length - 1];
+    for (let i = 1; i < ang.length; i++) gap = Math.max(gap, ang[i] - ang[i - 1]);
+    const spread = TAU - gap;
+    return spread > DIV.flankWide ? 1 + DIV.flankBonus : spread > DIV.flankWide * 0.6 ? 1 + DIV.flankBonus * 0.5 : 1;
+  }
+  // Суммарный состав стороны.
+  poolOf(list) {
+    const p = {};
+    for (const d of list) for (const u in d.units) p[u] = (p[u] || 0) + d.units[u];
+    return p;
+  }
+  // Доля урона dmg по общему составу pool приходится на дивизию e по её доле в каждом роде войск.
+  hitDivision(btl, e, dmg, pool, def, dt, k) {
+    const part = {};
+    for (const j in dmg) if (e.units[j] && pool[j]) part[j] = dmg[j] * e.units[j] / pool[j];
+    const killed = this.applyDamage(e.units, e.wounds, part, Mods.mod('defense', this, 1 / (1 + def), e));
+    btl.loss[e.id] = (btl.loss[e.id] || 0) + killed;
+    e.org = Math.max(0, e.org - killed / Math.max(1, btl.men[e.id] || 1) * (k || DIV.orgLossK) - DIV.orgFatigue * dt);
+    return killed;
+  }
+  // Защита дивизии: местность (если она обороняется) и окапывание.
+  divDefense(d, defending) {
+    return (defending ? this.terrainDef(d.x, d.y) : 0) + (d.entrench || 0) * DIV.digDef;
+  }
 
   updateBattles(dt) {
     for (const btl of this.battles.slice()) {
+      if (this.battles.indexOf(btl) < 0) continue;
       btl.t += dt;
       if (btl.kind === 'field') this.tickField(btl, dt);
       else this.tickSiege(btl, dt);
@@ -799,30 +869,43 @@ class Game {
   }
 
   tickField(btl, dt) {
-    const a = this.army(btl.a), b = this.army(btl.b);
-    if (!a || !b) { this.finishField(btl, a ? 'a' : b ? 'b' : null); return; }
-    const volley = btl.t < COMBAT.volley;
-    const defA = btl.defender === 'a' ? this.terrainDef(a.x, a.y) : 0;
-    const defB = btl.defender === 'b' ? this.terrainDef(b.x, b.y) : 0;
-    const dA = this.damage(a.units, b.units, { volley, mult: this.moraleMult(a), dt });
-    const dB = this.damage(b.units, a.units, { volley, mult: this.moraleMult(b), dt });
-    const kb = this.applyDamage(b.units, b.wounds, dA, Mods.mod('defense', this, 1 / (1 + defB), b));
-    const ka = this.applyDamage(a.units, a.wounds, dB, Mods.mod('defense', this, 1 / (1 + defA), a));
-    btl.lossA += ka; btl.lossB += kb;
-    this.creditKills(a.owner, b.owner, kb);
-    this.creditKills(b.owner, a.owner, ka);
-    a.morale = Math.max(0, a.morale - ka / Math.max(1, btl.startA) * 130);
-    b.morale = Math.max(0, b.morale - kb / Math.max(1, btl.startB) * 130);
-    if (ka || kb) this.fxHit(btl.x, btl.y, ka + kb);
-    const menA = menCount(a.units), menB = menCount(b.units);
-    const routA = menA === 0 || a.morale < COMBAT.routMorale || menA < btl.startA * COMBAT.routFrac;
-    const routB = menB === 0 || b.morale < COMBAT.routMorale || menB < btl.startB * COMBAT.routFrac;
-    if (routA || routB) {
-      let winner;
-      if (routA && routB) winner = menA >= menB ? 'a' : 'b';
-      else winner = routA ? 'b' : 'a';
-      this.finishField(btl, winner);
+    this.pullIn(btl);
+    let A = this.sideArmies(btl, 'a'), B = this.sideArmies(btl, 'b');
+    // заключили мир посреди боя: дивизии, у которых напротив не осталось врагов, выходят из сражения
+    const foes = (X, Y) => X.filter(d => Y.some(e => this.isHostile(d.owner, e.owner)));
+    const A2 = foes(A, B), B2 = foes(B, A);
+    if (A2.length !== A.length || B2.length !== B.length) {
+      for (const d of A.concat(B)) if (A2.indexOf(d) < 0 && B2.indexOf(d) < 0) { this.dropFromBattle(btl, d); d.state = 'idle'; d.immuneUntil = this.time + 3; }
+      A = A2; B = B2;
     }
+    btl.sideA = A.map(x => x.id); btl.sideB = B.map(x => x.id);
+    if (!A.length || !B.length) { this.finishField(btl, A.length ? 'a' : B.length ? 'b' : null); return; }
+    btl.a = A[0].id; btl.b = B[0].id;
+    const volley = btl.t < COMBAT.volley;
+    const poolA = this.poolOf(A), poolB = this.poolOf(B);
+    const flA = this.flankMult(A, B), flB = this.flankMult(B, A);
+    btl.flankA = flA; btl.flankB = flB;
+    const toA = {}, toB = {};
+    for (const d of A) addUnits(toB, this.damage(d.units, poolB, { volley, mult: this.moraleMult(d) * flA, dt }));
+    for (const d of B) addUnits(toA, this.damage(d.units, poolA, { volley, mult: this.moraleMult(d) * flB, dt }));
+    let ka = 0, kb = 0;
+    for (const e of B) kb += this.hitDivision(btl, e, toB, poolB, this.divDefense(e, btl.defender === 'b'), dt);
+    for (const e of A) ka += this.hitDivision(btl, e, toA, poolA, this.divDefense(e, btl.defender === 'a'), dt);
+    btl.lossA += ka; btl.lossB += kb;
+    this.creditKills(btl.ownA, btl.ownB, kb);
+    this.creditKills(btl.ownB, btl.ownA, ka);
+    if (ka || kb) this.fxHit(btl.x, btl.y, ka + kb);
+    // опыт; разбитые и обескровленные дивизии выходят из боя и отходят к своим
+    for (const d of A.concat(B)) {
+      d.xp = Math.min(DIV.xpMax, (d.xp || 0) + DIV.xpBattle * dt);
+      const men = menCount(d.units);
+      if (!men) { this.dropFromBattle(btl, d); this.removeArmy(d); continue; }
+      if (d.org < DIV.routOrg || men < (btl.men[d.id] || men) * COMBAT.routFrac) {
+        this.dropFromBattle(btl, d);
+        this.withdraw(d, btl);
+      }
+    }
+    if (!btl.sideA.length || !btl.sideB.length) this.finishField(btl, btl.sideA.length ? 'a' : btl.sideB.length ? 'b' : null);
   }
 
   creditKills(killerOwner, victimOwner, n) {
@@ -833,53 +916,93 @@ class Game {
   }
 
   finishField(btl, winner) {
+    if (this.battles.indexOf(btl) < 0) return;
     this.battles = this.battles.filter(x => x !== btl);
-    const a = this.army(btl.a), b = this.army(btl.b);
-    const win = winner === 'a' ? a : winner === 'b' ? b : null;
-    const lose = winner === 'a' ? b : winner === 'b' ? a : null;
+    const W = winner ? this.sideArmies(btl, winner) : [];
+    const L = winner ? this.sideArmies(btl, winner === 'a' ? 'b' : 'a') : this.sideArmies(btl, 'a').concat(this.sideArmies(btl, 'b'));
+    const wOwn = winner === 'a' ? btl.ownA : winner === 'b' ? btl.ownB : null;
+    const lOwn = winner === 'a' ? btl.ownB : winner === 'b' ? btl.ownA : null;
+    const wk = this.kingdom(wOwn), lk = this.kingdom(lOwn);
     const pl = this.player;
-    if (win) {
+    if (wk && wk.stats) wk.stats.won++;
+    if (lk && lk.stats) lk.stats.lost++;
+    if (lk && lk.bandit && wk && !wk.bandit) {
+      const loot = 120 + Math.round((winner === 'a' ? btl.startB : btl.startA) * 1.5);
+      wk.res.gold += loot;
+      if (wk.isPlayer) this.notify('Разбойники разбиты. Добыча: ' + loot + ' золота', 'good', btl);
+    }
+    for (const win of W) {
       win.state = 'idle'; win.battleId = null;
-      win.morale = Math.min(100, win.morale + 15);
-      const wk = this.kingdom(win.owner);
-      if (wk && wk.stats) wk.stats.won++;
-      if (lose && lose.isBandit && wk && !wk.bandit) {
-        const loot = 120 + Math.round(menCount(lose.units) * 2);
-        wk.res.gold += loot;
-        if (wk.isPlayer) this.notify('Разбойники разбиты. Добыча: ' + loot + ' золота', 'good', win);
-      }
+      win.org = Math.min(100, win.org + DIV.orgWin);
+      win.xp = Math.min(DIV.xpMax, (win.xp || 0) + DIV.xpWin);
       // продолжаем прежний приказ
       if (win.resumeSiege) {
         const c = this.city(win.resumeSiege);
         win.resumeSiege = null;
         if (c && c.owner !== win.owner && this.isHostile(win.owner, c.owner)) { this.startSiege(win, c); }
       } else if (win.dest && win.dest.kind !== 'army') {
-        const d = win.dest;
-        const err = this.order(win, d);
+        const err = this.order(win, win.dest);
         if (err) { win.dest = null; win.state = 'idle'; }
       } else { win.dest = null; win.path = null; }
     }
-    if (lose) {
-      const lk = this.kingdom(lose.owner);
-      if (lk && lk.stats) lk.stats.lost++;
-      lose.battleId = null;
-      lose.resumeSiege = null;
-      if (!menCount(lose.units)) this.removeArmy(lose);
-      else this.retreat(lose);
+    // без победителя (обе стороны ушли) оставшиеся просто встают
+    for (const d of L) {
+      d.battleId = null; d.resumeSiege = null;
+      if (winner) this.withdraw(d, btl); else { d.state = 'idle'; d.path = null; d.dest = null; }
     }
-    if (pl && win && lose && (win.owner === pl.id || lose.owner === pl.id)) {
-      const mine = win.owner === pl.id;
-      const kills = winner === 'a' ? btl.lossB : btl.lossA;
-      const lost = winner === 'a' ? btl.lossA : btl.lossB;
-      this.notify(mine ? `Победа! Враг потерял ${mine ? kills : lost}, мы — ${mine ? lost : kills}` : `Поражение. Мы потеряли ${winner === 'a' ? btl.lossB : btl.lossA} воинов`, mine ? 'good' : 'bad', btl, true);
+    if (pl && wk && lk && (wOwn === pl.id || lOwn === pl.id)) {
+      const mine = wOwn === pl.id;
+      const ours = (winner === 'a') === mine ? btl.lossA : btl.lossB, theirs = (winner === 'a') === mine ? btl.lossB : btl.lossA;
+      this.notify(mine ? `Победа! Враг потерял ${theirs}, мы — ${ours}` : `Поражение. Мы потеряли ${ours} воинов`, mine ? 'good' : 'bad', btl, true);
     }
-    this.emit('battleEnd', { btl, winner: win, loser: lose });
+    this.emit('battleEnd', { btl, winner: W[0] || null, loser: L[0] || null });
   }
 
+  // Отход: разбитая дивизия выходит из боя и отступает на несколько клеток к своим (не обязательно до города).
+  withdraw(d, btl) {
+    d.battleId = null; d.resumeSiege = null; d.entrench = 0; d.path = null; d.march = false;
+    const k = this.kingdom(d.owner);
+    if (d.isBandit || !k || k.bandit) { this.removeArmy(d); return; }
+    d.state = 'retreat';
+    d.immuneUntil = this.time + DIV.retreatImmune;
+    // от врагов…
+    let ex = btl ? btl.x : d.x, ey = btl ? btl.y : d.y, n = 0, sx = 0, sy = 0;
+    if (btl) {
+      const mine = btl.kind === 'siege' ? null : this.sideFor(btl, d.owner);
+      const foes = mine ? this.sideArmies(btl, mine === 'a' ? 'b' : 'a') : [];
+      for (const f of foes) { sx += f.x; sy += f.y; n++; }
+      if (n) { ex = sx / n; ey = sy / n; }
+    }
+    let ax = d.x - ex, ay = d.y - ey, al = Math.hypot(ax, ay);
+    if (al > 0.01) { ax /= al; ay /= al; } else { ax = 0; ay = 0; }
+    // …и к ближайшему своему городу
+    let best = null, bd = Infinity;
+    for (const c of this.cities) {
+      if (c.owner !== d.owner || c.siegeBy) continue;
+      const dd = dist(c.x + 0.5, c.y + 0.5, d.x, d.y);
+      if (dd < bd) { bd = dd; best = c; }
+    }
+    if (best && bd > 0.5) { ax = ax * 0.6 + (best.x + 0.5 - d.x) / bd * 0.4; ay = ay * 0.6 + (best.y + 0.5 - d.y) / bd * 0.4; }
+    al = Math.hypot(ax, ay);
+    if (al > 0.01) {
+      ax /= al; ay /= al;
+      for (const rot of [0, 0.6, -0.6, 1.2, -1.2]) {
+        const c = Math.cos(rot), s = Math.sin(rot);
+        const L = best ? Math.min(DIV.fallback, Math.max(1, bd - 1)) : DIV.fallback;
+        const tx = d.x + (ax * c - ay * s) * L, ty = d.y + (ax * s + ay * c) * L;
+        const i = this.world.tileAt(tx, ty);
+        if (i < 0 || !this.world.passable(i) || !this.world.main[i]) continue;
+        if (this.setPath(d, tx, ty)) { d.dest = { kind: 'ground', x: tx, y: ty }; return; }
+      }
+    }
+    this.retreat(d);
+  }
+
+  // Полное отступление к ближайшему своему городу (когда отойти к своим некуда).
   retreat(a) {
     a.state = 'retreat';
     a.immuneUntil = this.time + 10;
-    a.morale = Math.max(a.morale, 30);
+    a.org = Math.max(a.org, 10);
     const k = this.kingdom(a.owner);
     if (a.isBandit || !k || k.bandit) {
       // разбойники рассеиваются
@@ -897,22 +1020,116 @@ class Game {
     a.dest = { kind: 'city', id: best.id };
   }
 
+  // ---------- осады ----------
+  // В осаде могут участвовать несколько дивизий (sideA); a — ведущая, её id в c.siegeBy.
+  siegeOf(c) {
+    for (const b of this.battles) if (b.kind === 'siege' && b.city === c.id) return b;
+    return null;
+  }
+  startSiege(a, c) {
+    if (c.siegeBy && c.siegeBy !== a.id) {
+      const other = this.army(c.siegeBy);
+      if (other && this.isHostile(other.owner, a.owner)) {
+        if (other.state !== 'battle') { this.startField(a, other); return; }
+      } else if (other && other.owner === a.owner) {
+        const btl = this.siegeOf(c);
+        if (btl) { this.joinSiege(btl, a, c); return; }
+      } else if (other) { a.state = 'idle'; a.dest = null; return; }   // город уже осаждает союзник или держава, с которой мир, — ждём рядом
+    }
+    a.state = 'siege'; a.siegeCity = c.id; a.dest = { kind: 'city', id: c.id }; a.path = null; a.march = false;
+    c.siegeBy = a.id;
+    c.siegeT = 0;
+    const btl = {
+      id: this.newId(), kind: 'siege', a: a.id, sideA: [a.id], city: c.id, t: 0, x: c.x + 0.5, y: c.y + 0.5,
+      startA: menCount(a.units), lossA: 0, lossB: 0, men: { [a.id]: menCount(a.units) }, loss: { [a.id]: 0 },
+    };
+    a.battleId = btl.id;
+    this.battles.push(btl);
+    // горожане берутся за оружие один раз за осаду
+    if (!c.raised && c.owner !== -1) {
+      const n = Math.floor(c.pop * 0.05 / 10) * 10;
+      if (n > 0) { c.garrison.militia = (c.garrison.militia || 0) + n; c.pop -= n; }
+      c.raised = true;
+    }
+    const pl = this.player;
+    if (pl && c.owner === pl.id) this.notify('Враг осаждает ' + c.name + '!', 'bad', c, true);
+    else if (pl && a.owner === pl.id) this.notify(a.name + ' осаждает ' + c.name, 'war', c);
+    this.emit('siege', { army: a, city: c });
+  }
+  // Ещё одна дивизия встаёт под стены: со своей стороны города, чуть в стороне от соседей.
+  joinSiege(btl, a, c) {
+    a.state = 'siege'; a.siegeCity = c.id; a.dest = { kind: 'city', id: c.id }; a.path = null; a.march = false;
+    a.battleId = btl.id;
+    btl.sideA.push(a.id);
+    const m = menCount(a.units);
+    btl.men[a.id] = m; btl.loss[a.id] = 0; btl.startA += m;
+    const cx = c.x + 0.5, cy = c.y + 0.5;
+    let ang = Math.atan2(a.y - cy, a.x - cx);
+    for (let tries = 0; tries < 6; tries++) {
+      let clash = false;
+      for (const id of btl.sideA) {
+        const o = this.army(id);
+        if (o && o !== a && dist(o.x, o.y, cx + Math.cos(ang) * 1.1, cy + Math.sin(ang) * 1.1) < 0.7) { clash = true; break; }
+      }
+      if (!clash) break;
+      ang += (tries % 2 ? -1 : 1) * (0.7 + tries * 0.35);
+    }
+    const tx = cx + Math.cos(ang) * 1.1, ty = cy + Math.sin(ang) * 1.1, i = this.world.tileAt(tx, ty);
+    if (i >= 0 && this.world.passable(i)) { a.x = tx; a.y = ty; }
+  }
+  // Дивизия уходит из осады; последняя снимает осаду совсем.
+  leaveSiege(a) {
+    const c = this.city(a.siegeCity);
+    for (const btl of this.battles) {
+      if (btl.kind !== 'siege' || (btl.a !== a.id && btl.sideA.indexOf(a.id) < 0)) continue;
+      btl.sideA = btl.sideA.filter(id => id !== a.id);
+      if (btl.a === a.id && btl.sideA.length) btl.a = btl.sideA[0];
+      if (!btl.sideA.length) {
+        this.battles = this.battles.filter(b => b !== btl);
+        if (c && c.siegeBy === a.id) c.siegeBy = null;
+      } else if (c && c.siegeBy === a.id) c.siegeBy = btl.a;
+      break;
+    }
+    if (c && c.siegeBy === a.id) c.siegeBy = null;
+    a.siegeCity = null;
+    a.battleId = null;
+  }
+  pauseSiege(a) { this.leaveSiege(a); }
+  endSiege(a, keepState) {
+    this.leaveSiege(a);
+    if (!keepState) a.state = 'idle';
+  }
+
   tickSiege(btl, dt) {
-    const a = this.army(btl.a), c = this.city(btl.city);
-    if (!a || !c || c.owner === a.owner || a.state !== 'siege') {
+    const c = this.city(btl.city);
+    const parts = [];
+    if (c) for (const id of btl.sideA) {
+      const x = this.army(id);
+      if (x && x.state === 'siege' && x.siegeCity === c.id && x.owner !== c.owner && this.isHostile(x.owner, c.owner)) parts.push(x);
+    }
+    if (!c || !parts.length) {
       this.battles = this.battles.filter(x => x !== btl);
-      if (c && a && c.siegeBy === a.id) c.siegeBy = null;
+      if (c && c.siegeBy === btl.a) c.siegeBy = null;
+      for (const id of btl.sideA) {
+        const x = this.army(id);
+        if (x && x.state === 'siege' && x.siegeCity === btl.city) { x.state = 'idle'; x.siegeCity = null; x.battleId = null; x.dest = null; }
+      }
       return;
     }
-    c.siegeBy = a.id;
+    btl.sideA = parts.map(x => x.id);
+    btl.a = parts[0].id;
+    c.siegeBy = btl.a;
     c.siegeT = (c.siegeT || 0) + dt;
     const wallsUp = c.walls > 0 && c.wallHp > 0;
+    const pool = this.poolOf(parts);
     // стены
-    if (c.walls > 0 && c.wallHp > 0) {
-      c.wallHp = Math.max(0, c.wallHp - Mods.mod('siege', this, siegePower(a.units) + menCount(a.units) * 0.02, a) * dt);
+    if (wallsUp) {
+      let sp = 0;
+      for (const d of parts) sp += Mods.mod('siege', this, siegePower(d.units) + menCount(d.units) * 0.02, d);
+      c.wallHp = Math.max(0, c.wallHp - sp * dt);
       if (c.wallHp <= 0) {
         const pl = this.player;
-        if (pl && (c.owner === pl.id || a.owner === pl.id)) this.notify('Стены города ' + c.name + ' пробиты!', c.owner === pl.id ? 'bad' : 'war', c);
+        if (pl && (c.owner === pl.id || parts[0].owner === pl.id)) this.notify('Стены города ' + c.name + ' пробиты!', c.owner === pl.id ? 'bad' : 'war', c);
         this.fxBoom(c.x + 0.5, c.y + 0.5);
       }
     }
@@ -920,46 +1137,46 @@ class Game {
     const bonus = wallsUp ? WALLS[c.walls].bonus : 0;
     // башни бьют по осаждающим
     const towerDps = c.towers ? TOWERS[c.towers].dps * (wallsUp ? 1 : 0.5) : 0;
-    let lossA = 0, lossB = 0;
+    const toA = {};
     if (towerDps > 0) {
-      const dmg = {};
       let hpSum = 0;
-      for (const j in a.units) hpSum += a.units[j] * UNITS[j].hp;
-      for (const j in a.units) dmg[j] = towerDps * dt * (a.units[j] * UNITS[j].hp / Math.max(1, hpSum)) * 6 / (6 + UNITS[j].def * 1.5);
-      lossA += this.applyDamage(a.units, a.wounds, dmg, 1);
+      for (const j in pool) hpSum += pool[j] * UNITS[j].hp;
+      for (const j in pool) toA[j] = towerDps * dt * (pool[j] * UNITS[j].hp / Math.max(1, hpSum)) * 6 / (6 + UNITS[j].def * 1.5);
     }
+    let lossA = 0, lossB = 0;
     if (menCount(c.garrison) > 0) {
       const gMult = (c.owner === -1 ? 0.9 : 1) * (1 + (wallsUp ? 0.3 : 0));
-      const dG = this.damage(c.garrison, a.units, { volley, mult: gMult, dt });
-      for (const j in dG) if (UNITS[j] && c.garrison && wallsUp) dG[j] *= 1;
-      const dA = this.damage(a.units, c.garrison, { volley, mult: this.moraleMult(a), dt, walls: wallsUp, wallsUp });
-      lossB += this.applyDamage(c.garrison, c.wounds, dA, 1 / (1 + bonus));
-      lossA += this.applyDamage(a.units, a.wounds, dG, Mods.mod('defense', this, 1, a));
+      addUnits(toA, this.damage(c.garrison, pool, { volley, mult: gMult, dt }));
+      const toG = {};
+      for (const d of parts) addUnits(toG, this.damage(d.units, c.garrison, { volley, mult: this.moraleMult(d), dt, walls: wallsUp, wallsUp }));
+      lossB += this.applyDamage(c.garrison, c.wounds, toG, 1 / (1 + bonus));
     }
+    for (const d of parts) lossA += this.hitDivision(btl, d, toA, pool, 0, 0, DIV.orgLossSiege);
     btl.lossA += lossA; btl.lossB += lossB;
-    this.creditKills(c.owner, a.owner, lossA);
-    this.creditKills(a.owner, c.owner, lossB);
-    a.morale = Math.max(0, a.morale - lossA / Math.max(1, btl.startA) * 110);
+    this.creditKills(c.owner, parts[0].owner, lossA);
+    this.creditKills(parts[0].owner, c.owner, lossB);
     if (lossA || lossB) this.fxHit(c.x + 0.5, c.y + 0.5, lossA + lossB);
-    const menA = menCount(a.units);
-    if (menA === 0) {
-      c.siegeBy = null;
-      this.battles = this.battles.filter(x => x !== btl);
-      this.siegeRepelled(c, a, btl);
-      this.removeArmy(a);
-      return;
+    // опыт; обескровленные и разбитые дивизии отходят от стен
+    let last = parts[0];
+    for (const d of parts) {
+      d.xp = Math.min(DIV.xpMax, (d.xp || 0) + DIV.xpBattle * 0.5 * dt);
+      const men = menCount(d.units);
+      if (!men) { last = d; this.leaveSiege(d); this.removeArmy(d); continue; }
+      if (d.org < DIV.routOrg || men < (btl.men[d.id] || men) * COMBAT.routFrac) {
+        last = d;
+        this.leaveSiege(d);
+        this.withdraw(d, null);
+      }
     }
-    if (a.morale < COMBAT.routMorale || menA < btl.startA * COMBAT.routFrac) {
+    if (this.battles.indexOf(btl) < 0 || !btl.sideA.length) {
       this.battles = this.battles.filter(x => x !== btl);
-      c.siegeBy = null;
-      a.siegeCity = null; a.battleId = null;
-      this.siegeRepelled(c, a, btl);
-      this.retreat(a);
+      if (c.siegeBy && !this.army(c.siegeBy)) c.siegeBy = null;
+      if (!c.siegeBy) this.siegeRepelled(c, last, btl);
       return;
     }
     if (menCount(c.garrison) === 0 && (c.walls === 0 || c.wallHp <= 0)) {
       this.battles = this.battles.filter(x => x !== btl);
-      this.capture(c, a);
+      this.capture(c, this.army(btl.a), btl);
     }
   }
 
@@ -974,13 +1191,18 @@ class Game {
     else if (pl && a.owner === pl.id) this.notify('Осада ' + c.name + ' провалилась', 'bad', c, true);
   }
 
-  capture(c, a) {
+  // Город взят. Одиночная дивизия входит в город целиком (как раньше); дивизия фронта или армии, а также
+  // при осаде несколькими дивизиями — оставляет в городе гарнизон из части воинов и остаётся в поле.
+  capture(c, a, btl) {
     if (Mods.mod('capture', this, false, c, a)) return;   // модуль сам распорядился городом (например, мятеж)
     const old = this.kingdom(c.owner);
     const ak = this.kingdom(a.owner);
     c.siegeBy = null;
     c.raised = false;
     a.siegeCity = null; a.battleId = null;
+    const others = [];
+    if (btl) for (const id of btl.sideA) { const o = this.army(id); if (o && o !== a && o.siegeCity === c.id) others.push(o); }
+    for (const o of others) { o.state = 'idle'; o.siegeCity = null; o.battleId = null; o.dest = null; o.path = null; }
     const pl = this.player;
     if (a.isBandit || (ak && ak.bandit)) {
       // разбойники грабят и уходят
@@ -1000,13 +1222,25 @@ class Game {
     c.pop = Math.floor(c.pop * 0.75);
     c.construction = null;
     c.queue = [];
+    c.divQueue = [];
     c.wallHp = 0;
-    c.garrison = { ...a.units };
-    c.wounds = { ...a.wounds };
+    const stay = a.front !== null && a.front !== undefined || a.group !== null && a.group !== undefined || others.length > 0;
+    if (stay && menCount(a.units) >= 30) {
+      // в городе остаётся отряд, дивизия идёт дальше
+      const det = Fronts.detachment(a.units);
+      addUnits(a.units, det, -1);
+      c.garrison = det;
+      c.wounds = {};
+      a.state = 'idle'; a.dest = null; a.path = null;
+      a.tpl = Fronts.guessTpl(this, a.owner, a.units);
+    } else {
+      c.garrison = { ...a.units };
+      c.wounds = { ...a.wounds };
+      this.removeArmy(a);
+    }
     this.damageBuilding(c);
     const wasCapital = c.isCapital;
     c.isCapital = false;
-    this.removeArmy(a);
     this.refreshTerritory(true);
     // добыча
     let loot = 120 + c.level * 60;
@@ -1100,6 +1334,7 @@ class Game {
     this.updateFx(dt);
   }
 
+  // Соприкосновение враждебных дивизий: новый бой или вступление в уже идущий.
   checkContacts() {
     const arr = this.armies;
     for (let i = 0; i < arr.length; i++) {
@@ -1107,12 +1342,16 @@ class Game {
       if (a.state === 'battle' || a.immuneUntil > this.time) continue;
       for (let j = i + 1; j < arr.length; j++) {
         const b = arr[j];
-        if (!this.isHostile(a.owner, b.owner) || b.state === 'battle' || b.immuneUntil > this.time) continue;
         if (Math.abs(a.x - b.x) > COMBAT.contact || Math.abs(a.y - b.y) > COMBAT.contact) continue;
+        if (a.owner === b.owner || b.immuneUntil > this.time || !this.isHostile(a.owner, b.owner)) continue;
         if (dist(a.x, a.y, b.x, b.y) > COMBAT.contact) continue;
         // разбойники не трогают друг друга
         if (a.isBandit && b.isBandit) continue;
-        this.startField(a, b);
+        if (b.state === 'battle') {
+          const btl = this.battleOf(b), side = btl && btl.kind === 'field' ? this.sideFor(btl, a.owner) : null;
+          if (!side) continue;
+          this.joinBattle(btl, a, side);
+        } else this.startField(a, b);
         break;
       }
     }
@@ -1137,9 +1376,9 @@ class Game {
         if (k.starving && !wasStarving) this.notify('Голод! Население убывает, войска разбегаются. Стройте фермы.', 'bad', null, true);
       }
       if (k.unpaid || k.starving) {
-        for (const a of this.armies) {
+        for (const a of this.armies.slice()) {
           if (a.owner !== k.id) continue;
-          a.morale = Math.max(10, a.morale - 1.5 * dt);
+          a.org = Math.max(DIV.orgFloor, a.org - DIV.orgUnpaid * dt);
           for (const u in a.units) {
             if (this.rng.chance(0.02 * dt)) {
               a.units[u] = Math.max(0, a.units[u] - Math.ceil(a.units[u] * 0.04));
@@ -1151,7 +1390,6 @@ class Game {
       }
       k.stats.maxCities = Math.max(k.stats.maxCities || 0, this.citiesOf(k.id).length);
     }
-    for (const a of this.armies) if (a.state !== 'battle' && a.state !== 'siege') a.morale = Math.min(100, a.morale + 0.8 * dt);
     for (const c of this.cities) this.tickCity(c, dt);
   }
 

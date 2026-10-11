@@ -23,10 +23,11 @@ console.log('continue after load:', err || 'ok', 'time', g2.time.toFixed(0), 'ci
 // инварианты
 const bad = [];
 for (const a of g2.armies) {
-  if (a.state === 'battle' && !g2.battles.some(b => b.a === a.id || b.b === a.id)) bad.push('battle-without-btl ' + a.id);
-  if (a.state === 'siege' && !g2.battles.some(b => b.kind === 'siege' && b.a === a.id)) bad.push('siege-without-btl ' + a.id);
+  const inBtl = b => b.a === a.id || b.b === a.id || (b.sideA && b.sideA.indexOf(a.id) >= 0) || (b.sideB && b.sideB.indexOf(a.id) >= 0);
+  if (a.state === 'battle' && !g2.battles.some(inBtl)) bad.push('battle-without-btl ' + a.id);
+  if (a.state === 'siege' && !g2.battles.some(b => b.kind === 'siege' && inBtl(b))) bad.push('siege-without-btl ' + a.id);
   if (a.state === 'move' && !a.path) bad.push('move-without-path ' + a.id);
 }
 for (const c of g2.cities) if (c.siegeBy && !g2.army(c.siegeBy)) bad.push('dangling siegeBy ' + c.name);
-for (const b of g2.battles) { if (!g2.army(b.a)) bad.push('btl missing a'); if (b.kind === 'field' && !g2.army(b.b)) bad.push('btl missing b'); }
+for (const b of g2.battles) { if (!g2.army(b.a)) bad.push('btl missing a'); if (b.kind === 'field' && !g2.army(b.b)) bad.push('btl missing b'); for (const id of (b.sideA || []).concat(b.sideB || [])) if (!g2.army(id)) bad.push('btl missing member ' + id); }
 console.log('invariants:', bad.length ? bad.join('; ') : 'ok');

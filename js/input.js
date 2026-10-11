@@ -41,8 +41,8 @@ class Input {
       if (!this.app.playing()) return;
       Sfx.resume();
       const p = mmPos(e);
-      const a = this.app.ui.selectedArmy();
-      if (e.button === 2 && a) { this.orderTo(a, { kind: 'ground', x: p.x, y: p.y }); return; }
+      const a = this.app.ui.selectedDivs();
+      if (e.button === 2 && a.length) { this.orderTo(a, { kind: 'ground', x: p.x, y: p.y }); return; }
       this.app.focus(p.x, p.y);
       mmDrag = true;
       try { mm.setPointerCapture(e.pointerId); } catch (err) { /* не обязательно */ }
@@ -77,6 +77,9 @@ class Input {
     try { this.canvas.setPointerCapture(e.pointerId); } catch (err) { /* не обязательно */ }
     const pt = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, moved: false, button: e.button, type: e.pointerType };
     this.pointers.set(e.pointerId, pt);
+    pt.shift = !!e.shiftKey;
+    // Shift+перетаскивание мышью — рамка выделения дивизий без кнопки в панели
+    if (!this.tool && this.pointers.size === 1 && e.shiftKey && e.pointerType === 'mouse' && e.button === 0 && UIExt.shiftTool) this.setTool(UIExt.shiftTool(this.app.ui));
     if (this.tool && this.pointers.size === 1 && e.button !== 2) {
       pt.tool = true;
       if (this.tool.down) this.tool.down(this.r.toWorld(e.clientX, e.clientY), e, this);
@@ -136,18 +139,19 @@ class Input {
   tap(sx, sy, alt) {
     const app = this.app, g = app.game, ui = app.ui;
     const hit = this.r.pick(sx, sy);
-    const a = ui.selectedArmy();
+    const sel = ui.selectedDivs(), a = sel[0];
     if (a) {
       if (hit.kind === 'army') {
         const t = hit.obj;
         if (t.owner === g.player.id) {
-          if (alt && t !== a) { this.orderTo(a, hit); return; }
-          ui.select(t.id === a.id ? null : { kind: 'army', id: t.id });
+          const inSel = sel.indexOf(t) >= 0;
+          if (alt && !inSel) { this.orderTo(sel, hit); return; }
+          ui.select(sel.length === 1 && t.id === a.id ? null : { kind: 'army', id: t.id });
           Sfx.play('click');
           return;
         }
       }
-      this.orderTo(a, hit);
+      this.orderTo(sel, hit);
       return;
     }
     if (alt) { ui.select(null); return; }
@@ -156,8 +160,10 @@ class Input {
     Sfx.play('click');
   }
 
-  orderTo(a, hit) {
+  // Приказ одной дивизии или нескольким (armies — массив): несколько идут строем.
+  orderTo(armies, hit) {
     const g = this.app.game, ui = this.app.ui;
+    const list = Array.isArray(armies) ? armies : [armies], a = list[0];
     let target, attack = false, x, y;
     if (hit.kind === 'army') {
       const t = hit.obj;
@@ -175,7 +181,9 @@ class Input {
       target = { kind: 'ground', x: hit.x, y: hit.y };
       x = hit.x; y = hit.y;
     }
-    const err = g.order(a, target);
+    let err;
+    if (list.length > 1) err = Fronts.orderMany(g, list, target);
+    else { a.front = null; err = g.order(a, target); }
     if (err) { ui.toast(err); Sfx.play('error'); return; }
     this.r.marker = { x, y, t: 0, attack };
     Sfx.play(attack ? 'horn' : 'march');

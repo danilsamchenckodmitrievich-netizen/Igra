@@ -110,6 +110,7 @@ class UI {
     $('kingdom-btn').addEventListener('click', () => this.select(this.sel && this.sel.kind === 'kingdom' ? null : { kind: 'kingdom' }));
     $('mm-toggle').addEventListener('click', () => $('minimap-wrap').classList.toggle('open'));
     $('panel-body').addEventListener('scroll', () => this.markStuck(), { passive: true });
+    $('panel-body').addEventListener('input', e => { if (UIExt.input) UIExt.input(e, this); });
     $('panel-body').addEventListener('click', e => {
       const b = e.target.closest('[data-act]');
       if (!b || b.disabled) return;
@@ -142,13 +143,14 @@ class UI {
     this.formFor = null;
     this.form = {};
     // другой город или армия — панель открывается с начала
-    if (!prev || !sel || prev.kind !== sel.kind || prev.id !== sel.id) { $('panel-body').scrollTop = 0; this.formOpen = false; }
+    if (!prev || !sel || prev.kind !== sel.kind || prev.id !== sel.id) { $('panel-body').scrollTop = 0; this.formOpen = false; FrontsUI.reset(); }
     if (this.app.renderer) this.app.renderer.selected = sel && (sel.kind === 'army' || sel.kind === 'city') ? sel : null;
     this.renderPanel();
     this.updateHint();
     this.revealSelection();
     if (sel && sel.kind === 'city') this.coachEvent('selectCity', sel.id);
     if (sel && sel.kind === 'army') this.coachEvent('selectArmy', sel.id);
+    if (sel && (sel.kind === 'group' || sel.kind === 'multi')) this.coachEvent('selectArmy', 0);
   }
   // Если панель закрыла выбранный город или армию, сдвинуть карту так, чтобы он был виден рядом с панелью.
   revealSelection() {
@@ -171,10 +173,12 @@ class UI {
     const a = this.g.army(s.id);
     return a && a.owner === this.g.player.id ? a : null;
   }
+  // Свои дивизии, которым пойдёт приказ: одна, армия целиком или выделенные рамкой.
+  selectedDivs() { return FrontsUI.selected(this); }
   updateHint() {
-    const a = this.selectedArmy();
+    const n = this.selectedDivs().length;
     const h = $('hint');
-    if (a) { h.textContent = 'Коснитесь цели: земля — идти, город — осада или вход, враг — атака'; h.hidden = false; }
+    if (n) { h.textContent = n > 1 ? 'Коснитесь цели: земля — идти строем, город — осада, враг — атака' : 'Коснитесь цели: земля — идти, город — осада или вход, враг — атака'; h.hidden = false; }
     else h.hidden = true;
   }
 
@@ -183,6 +187,7 @@ class UI {
     const g = this.g, pl = g.player;
     const city = this.sel && this.sel.kind === 'city' ? g.city(this.sel.id) : null;
     const army = this.selectedArmy();
+    const divs = this.selectedDivs();
     let err = null, tabbed = false;
     switch (d.act) {
       case 'tab': tabbed = this.cityTab !== d.v; this.cityTab = d.v; break;
@@ -206,10 +211,17 @@ class UI {
         break;
       }
       case 'form': {
-        const units = d.v === 'all' ? { ...city.garrison } : this.formUnits(city.garrison);
-        const a = g.formArmy(city, units);
-        if (!a) err = 'Выберите, кого вывести';
-        else { Sfx.play('horn'); this.select({ kind: 'army', id: a.id }); this.coachEvent('form'); return; }
+        let list;
+        if (d.v === 'all') list = Fronts.formAll(g, city);
+        else { const a = g.formArmy(city, this.formUnits(city.garrison)); list = a ? [a] : []; }
+        if (!list.length) err = 'Выберите, кого вывести';
+        else {
+          Sfx.play('horn');
+          this.formOpen = false;
+          if (list.length > 1) { FrontsUI.multi = list.map(a => a.id); this.select({ kind: 'multi' }); } else this.select({ kind: 'army', id: list[0].id });
+          this.coachEvent('form');
+          return;
+        }
         break;
       }
       case 'split': {
@@ -229,12 +241,14 @@ class UI {
         Sfx.play('horn');
         break;
       }
-      case 'stop': if (army) { g.stop(army); Sfx.play('click'); } break;
+      case 'stop': if (divs.length) { for (const a of divs) { a.front = null; g.stop(a); } Sfx.play('click'); } break;
       case 'home': {
-        if (!army) break;
-        let best = null, bd = Infinity;
-        for (const c of g.citiesOf(pl.id)) { const dd = dist(c.x, c.y, army.x, army.y); if (dd < bd) { bd = dd; best = c; } }
-        if (best) err = g.order(army, { kind: 'city', id: best.id });
+        for (const a of divs) {
+          let best = null, bd = Infinity;
+          for (const c of g.citiesOf(pl.id)) { const dd = dist(c.x, c.y, a.x, a.y); if (dd < bd) { bd = dd; best = c; } }
+          a.front = null;
+          if (best) err = g.order(a, { kind: 'city', id: best.id }) || err;
+        }
         break;
       }
       case 'jump': this.app.focus(+d.x, +d.y); break;
@@ -271,13 +285,18 @@ class UI {
     const g = this.g;
     const s = this.sel;
     let html = '';
+    if (this.app.renderer && g) this.app.renderer.hl = FrontsUI.hl(this);
     if (!s || !g) { $('panel').hidden = true; this.html = ''; return; }
     if (s.kind === 'city') { const c = g.city(s.id); if (!c) return this.select(null); html = this.cityHtml(c); }
     else if (s.kind === 'army') { const a = g.army(s.id); if (!a) return this.select(null); html = this.armyHtml(a); }
+    else if (s.kind === 'group' || s.kind === 'multi') {
+      if (!this.selectedDivs().length) return this.select(null);
+      html = FrontsUI.selHtml(this, s);
+    }
     else if (s.kind === 'kingdom') html = this.kingdomHtml();
     const panel = $('panel');
     panel.hidden = false;
-    panel.classList.toggle('compact', s.kind === 'army');
+    panel.classList.toggle('compact', s.kind === 'army' || s.kind === 'group' || s.kind === 'multi');
     // карточки в две колонки, когда панель достаточно широка
     panel.classList.toggle('two', panel.clientWidth >= 340);
     if (html !== this.html) {
@@ -587,6 +606,7 @@ class UI {
     let h = '<div class="pane" data-key="pane-army">';
     if (c.queue.length) h += this.queueHtml(c, pl);
     h += this.garrisonHtml(c);
+    h += FrontsUI.cityHtml(this, c);
     h += '<h5 class="sec">Найм отрядов</h5><div class="bcards">';
     for (const uid of UNIT_ORDER) h += this.unitCard(c, pl, uid);
     return h + '</div></div>';
@@ -676,28 +696,16 @@ class UI {
     return h;
   }
 
-  armyHtml(a) {
-    const g = this.g, k = g.kingdom(a.owner);
-    const mine = k && k.isPlayer;
-    const seen = mine || g.isVisible(a.x, a.y);
-    let h = `<div class="p-head">${Icons.crest(k, 40)}<div><h2>${escapeHtml(a.name || 'Войско')}</h2><div class="sub">${escapeHtml(k.name)} · <span data-live="astatus"></span></div></div></div>`;
-    h += `<div class="p-stats"><span>${Icons.svg('people')}<b data-live="amen"></b></span><span title="Сила">${Icons.svg('swords')}<b data-live="apower"></b></span>` +
-      `<span title="Скорость">${Icons.svg('flag')}${this.g.armySpeed(a).toFixed(2)} кл/с</span></div>`;
-    h += `<div class="row2" style="display:flex;justify-content:space-between;font-size:14px"><span>Боевой дух</span><span data-live="amorale"></span></div><div class="progress morale" style="margin-bottom:10px"><i data-live="amoralebar"></i></div>`;
-    h += seen ? this.unitsHtml(a.units) : '<span class="tip">Состав неизвестен</span>';
-    if (mine) {
-      h += `<div class="btnrow"><button class="act" type="button" data-act="stop">Стоп</button><button class="act" type="button" data-act="home">В ближайший город</button>` +
-        `<button class="act ghost" type="button" data-act="split">Разделить</button><button class="act ghost" type="button" data-act="merge">Объединить с соседними</button></div>`;
-      h += '<p class="tip">Коснитесь земли, чтобы идти; чужого города — чтобы осадить; своего — чтобы войти в гарнизон; вражеской армии — чтобы атаковать. Отступающая армия не слушается приказов, пока не дойдёт до своего города.</p>';
-    } else if (a.isBandit) h += '<p class="tip">Разбойники грабят города и уходят. За их разгром дают добычу.</p>';
-    return h;
-  }
+  armyHtml(a) { return FrontsUI.divHtml(this, a); }
 
   kingdomHtml() {
     const g = this.g, pl = g.player;
     let h = `<div class="p-head">${Icons.crest(pl, 40)}<div><h2>${escapeHtml(pl.name)}</h2><div class="sub">${g.citiesOf(pl.id).length} из ${g.cities.length} городов · для победы нужно ${Math.ceil(g.cities.length * WIN_SHARE)}</div></div></div>`;
-    const tabs = [['treasury', 'Казна'], ['trade', 'Рынок'], ['cities', 'Города'], ['armies', 'Армии'], ['rivals', 'Соперники']];
+    const tabs = [['treasury', 'Казна'], ['trade', 'Рынок'], ['cities', 'Города'], ['rivals', 'Соперники']];
     for (const t of UIExt.kingdomTabs) tabs.push([t.id, t.title]);
+    // «Армии» (дивизии и фронты) — перед «Соперниками»
+    const ai = tabs.findIndex(t => t[0] === 'fronts'), ri = tabs.findIndex(t => t[0] === 'rivals');
+    if (ai > ri && ri >= 0) tabs.splice(ri, 0, tabs.splice(ai, 1)[0]);
     const extTab = UIExt.kingdomTabs.find(t => t.id === this.kTab);
     h += '<div class="tabs">' + tabs.map(([v, n]) => `<button type="button" data-act="ktab" data-v="${v}" class="${this.kTab === v ? 'on' : ''}">${n}</button>`).join('') + '</div>';
     if (extTab) {
@@ -726,14 +734,6 @@ class UI {
         h += `<tr class="click" data-act="selcity" data-id="${c.id}"><td>${escapeHtml(c.name)}${c.isCapital ? ' ★' : ''}</td><td class="num">${c.level}</td><td class="num">${fmtInt(c.pop)}</td><td class="num">${menCount(c.garrison)}</td><td>${c.siegeBy ? Icons.svg('swords') : c.construction ? Icons.svg('hammer') : ''}</td></tr>`;
       }
       h += '</tbody></table>';
-    } else if (this.kTab === 'armies') {
-      const list = g.armiesOf(pl.id);
-      if (!list.length) h += '<p class="tip">Армий в поле нет. Выведите войско из гарнизона города.</p>';
-      else {
-        h += '<table class="t"><thead><tr><th>Армия</th><th class="num">Воинов</th><th>Состояние</th></tr></thead><tbody>';
-        for (const a of list) h += `<tr class="click" data-act="selarmy" data-id="${a.id}"><td>${escapeHtml(a.name)}</td><td class="num">${menCount(a.units)}</td><td>${this.armyStatus(a)}</td></tr>`;
-        h += '</tbody></table>';
-      }
     } else {
       h += '<table class="t"><thead><tr><th>Держава</th><th class="num">Городов</th><th class="num">Сила</th></tr></thead><tbody>';
       for (const k of g.kingdoms) {
@@ -790,8 +790,6 @@ class UI {
         case 'astatus': text(el, a ? this.armyStatus(a) : ''); break;
         case 'amen': text(el, a ? fmtInt(menCount(a.units)) : ''); break;
         case 'apower': text(el, a ? Math.round(unitPower(a.units)) : ''); break;
-        case 'amorale': text(el, a ? Math.round(a.morale) + '%' : ''); break;
-        case 'amoralebar': width(el, a ? a.morale / 100 : 0); break;
         default:
           if (key.startsWith('inc-')) {
             if (!inc) inc = g.income(g.player);
@@ -830,6 +828,7 @@ class UI {
     }
     if (this.sel) this.updateLive();
     if (this.sel && this.sel.kind === 'army' && !g.army(this.sel.id)) this.select(null);
+    else if (this.sel && (this.sel.kind === 'group' || this.sel.kind === 'multi') && !this.selectedDivs().length) this.select(null);
     if (this.toastT > 0) { this.toastT -= dt; if (this.toastT <= 0) $('toast').className = ''; }
     const speedBtns = $('speed').children;
     for (const b of speedBtns) b.classList.toggle('on', +b.dataset.speed === this.app.speed);
@@ -882,8 +881,9 @@ class UI {
     return [
       { text: `Это ваша столица ${cap ? cap.name : ''}. Коснитесь её, чтобы открыть управление городом.`, done: f => f.selectCity },
       { text: 'Во вкладке «Хозяйство» постройте что-нибудь полезное: лесопилку, каменоломню или рынок. Выход зависит от местности вокруг.', done: f => f.build },
-      { text: 'Во вкладке «Войска» наймите отряд — копейщиков или лучников. Войска нужны и для защиты, и для захвата.', done: f => f.recruit },
-      { text: 'У столицы стоит ваша Дружина (щит с гербом). Коснитесь её, затем коснитесь ближайшего серого вольного города — начнётся осада.', done: f => f.siege || f.capture },
+      { text: 'Во вкладке «Войска» наймите отряд — копейщиков или лучников. Из воинов гарнизона формируются дивизии по шаблонам: «Сформировать» выводит дивизию в поле, «Обучить» ставит недостающих воинов в очередь найма.', done: f => f.recruit || f.form },
+      { text: 'Вот дивизия — плашка со значком шаблона, числом воинов и полосками численности и организованности. Коснитесь её, затем ближайшего серого вольного города — начнётся осада.', done: f => f.siege || f.capture },
+      { text: 'Несколько дивизий: Shift+щелчок или кнопка «Выделить рамкой» в окне державы (вкладка «Армии»), затем «Собрать армию» — она пойдёт строем. «Фронт по границе» или «Нарисовать фронт» расставят дивизии вдоль линии; «Наступление» двинет их вглубь чужих земель.', done: null },
       { text: `Захватывайте города: для победы нужно ${Math.ceil(g.cities.length * WIN_SHARE)} из ${g.cities.length}. Пауза — кнопка вверху или пробел, 2× и 3× ускоряют время. Удачи, государь!`, done: null },
     ];
   }

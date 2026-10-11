@@ -581,3 +581,50 @@ table.t tr.click:hover td { background: rgba(215, 169, 68, 0.15); }
 @media (prefers-reduced-motion: reduce) { .rotate-phone .rp-device { animation: none; } }
 
 #map.tool { cursor: crosshair; }
+
+/* ---------- дивизии, армии и фронты (js/fronts-ui.js) ---------- */
+.gdot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; border: 1px solid rgba(30, 18, 8, 0.6); }
+.p-head .flag { width: 40px; height: 40px; display: grid; place-items: center; flex: none; }
+.p-head .flag .ico { width: 34px; height: 34px; filter: drop-shadow(0 1px 0 rgba(30, 18, 8, 0.6)); }
+.dstate { font-size: 14px; margin: 2px 0 8px; color: var(--ink-soft); }
+.dstate b { color: var(--ink); }
+.dstate .fr { color: var(--ink); }
+.dbars { display: grid; gap: 6px; margin: 6px 0 10px; }
+.dbar { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; font-size: 14px; align-items: baseline; }
+.dbar .progress { grid-column: 1 / -1; height: 8px; margin-top: 2px; }
+.dbar b { font-size: 13px; color: var(--ink-soft); }
+.progress.org.ok i { background: linear-gradient(90deg, #4f7a2c, #86bf4c); }
+.progress.org.mid i { background: linear-gradient(90deg, #b8862b, #e9c264); }
+.progress.org.low i { background: linear-gradient(90deg, #7d2b1d, #d4492b); }
+.progress.xp i { background: linear-gradient(90deg, #4a6fa5, #86a9d8); }
+.progress.dig i { background: linear-gradient(90deg, #6b5a3a, #a89468); }
+.progress i { transition: width 0.3s linear; }
+.act.on { background: linear-gradient(#e9c264, #c8962e); color: var(--ink); }
+.dlist { display: grid; gap: 4px; margin: 6px 0 8px; }
+.drow { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid rgba(120, 90, 50, 0.3); border-radius: 8px; background: rgba(255, 250, 235, 0.55); cursor: pointer; min-height: 42px; }
+.drow:active { background: rgba(215, 169, 68, 0.25); }
+.drow .dn { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.15; }
+.drow .dn b { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.drow .dn small { color: var(--ink-soft); font-size: 12px; }
+.dic { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 7px; flex: none; color: #fff6dc; border: 1px solid rgba(30, 18, 8, 0.55); box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.2); }
+.dic .ico { width: 20px; height: 20px; }
+.dorg { width: 44px; height: 7px; border-radius: 4px; background: rgba(60, 40, 20, 0.2); overflow: hidden; flex: none; }
+.dorg i { display: block; height: 100%; border-radius: 4px; }
+.dorg i.ok { background: #6fae3b; } .dorg i.mid { background: #d7a944; } .dorg i.low { background: #c9552f; }
+.chk { width: 30px; height: 30px; flex: none; border: 1.5px solid var(--line); border-radius: 7px; background: var(--paper-2); color: var(--ink); display: grid; place-items: center; padding: 0; }
+.chk.on { background: var(--gold); border-color: #7a5714; }
+.chk .ico { width: 18px; height: 18px; }
+.tplrow { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid rgba(120, 90, 50, 0.25); }
+.tplrow:first-of-type { border-top: 0; }
+.tplrow .tp-t { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.tplrow .tp-t > b { font-size: 15px; }
+.tplrow .tp-t .units { width: 100%; gap: 3px 8px; font-size: 13px; }
+.tplrow .tp-t .cost { width: 100%; }
+.tplrow .qb { font-size: 12px; color: #7a5714; background: rgba(215, 169, 68, 0.3); border-radius: 8px; padding: 0 6px; }
+.tplrow .tp-b { display: flex; gap: 4px; flex: none; max-width: 46%; }
+.tplrow .tp-b .act { padding: 8px 10px; min-height: 38px; }
+.tplrow .tp-b .act.build { font-size: 12px; padding: 4px 8px; }
+.tpname { width: 100%; font: inherit; font-size: 16px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 8px; background: #fffaf0; color: var(--ink); }
+.box.front .box-h h4 { font-size: 17px; }
+.muted.neg, .neg { color: #a63a28; }
+#canvas.tool, canvas.tool { cursor: crosshair; }
