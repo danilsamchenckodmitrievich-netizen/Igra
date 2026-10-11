@@ -17,8 +17,11 @@ const AI = {
     if (!cities.length) return;
     const inc = g.income(k).total;
     const ctx = { cities, inc, threats: this.threats(g, k, cities) };
+    // общество (js/society.js): ставка налога, изучение знаний, войска в неспокойные города, наёмники
+    if (typeof Society !== 'undefined') Society.ai(g, k, ctx);
     this.economy(g, k, ctx);
     this.recruit(g, k, ctx);
+    Mods.call('aiThink', g, k, ctx);   // дипломатия и прочие модули
     this.military(g, k, ctx);
   },
 
@@ -34,7 +37,7 @@ const AI = {
   threats(g, k, cities) {
     const out = [];
     for (const a of g.armies) {
-      if (a.owner === k.id) continue;
+      if (a.owner === k.id || !g.isHostile(k.id, a.owner)) continue;
       let near = null, nd = 12;
       for (const c of cities) {
         const d = dist(a.x, a.y, c.x + 0.5, c.y + 0.5);
@@ -180,7 +183,7 @@ const AI = {
 
   minGarrison(g, k, c, ctx) {
     const threat = ctx.threats.filter(t => t.city === c).reduce((s, t) => s + t.power, 0);
-    return (c.isCapital ? 260 : 110) + c.level * 30 + threat * 0.4;
+    return (c.isCapital ? 260 : 110) + c.level * 30 + threat * 0.4 + Mods.mod('aiGarrison', g, 0, c);
   },
 
   // Войско: дивизии по шаблонам из лишних воинов гарнизонов, армия из полевых дивизий, оборона городов
@@ -313,6 +316,7 @@ const AI = {
         let score = dist(c.x, c.y, cx, cy) * 1.5 + this.cityDefense(g, c) / 40;
         if (ok && ok.isPlayer) score *= 1.15 / g.diff.aggression;
         if (c.isCapital) score *= 0.85;
+        score = Mods.mod('aiTarget', g, score, k, c);
         if (score < bs) { bs = score; best = c; }
       }
       if (best) k.ai.warUntil = g.time + 45;
