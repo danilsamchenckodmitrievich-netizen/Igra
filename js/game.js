@@ -484,6 +484,7 @@ class Game {
         parts.upkeep.food -= a.units[u] * (def.crew || 1) * (u === 'cavalry' || u === 'knight' || u === 'scout' ? 0.06 : 0.04);
       }
     }
+    parts.upkeep = Mods.mod('upkeep', this, parts.upkeep, k);
     for (const r in parts.upkeep) total[r] += parts.upkeep[r];
     if (factoryLv) {
       const conv = BUILDINGS.factory.convert;
@@ -805,8 +806,8 @@ class Game {
     const defB = btl.defender === 'b' ? this.terrainDef(b.x, b.y) : 0;
     const dA = this.damage(a.units, b.units, { volley, mult: this.moraleMult(a), dt });
     const dB = this.damage(b.units, a.units, { volley, mult: this.moraleMult(b), dt });
-    const kb = this.applyDamage(b.units, b.wounds, dA, 1 / (1 + defB));
-    const ka = this.applyDamage(a.units, a.wounds, dB, 1 / (1 + defA));
+    const kb = this.applyDamage(b.units, b.wounds, dA, Mods.mod('defense', this, 1 / (1 + defB), b));
+    const ka = this.applyDamage(a.units, a.wounds, dB, Mods.mod('defense', this, 1 / (1 + defA), a));
     btl.lossA += ka; btl.lossB += kb;
     this.creditKills(a.owner, b.owner, kb);
     this.creditKills(b.owner, a.owner, ka);
@@ -908,7 +909,7 @@ class Game {
     const wallsUp = c.walls > 0 && c.wallHp > 0;
     // стены
     if (c.walls > 0 && c.wallHp > 0) {
-      c.wallHp = Math.max(0, c.wallHp - (siegePower(a.units) + menCount(a.units) * 0.02) * dt);
+      c.wallHp = Math.max(0, c.wallHp - Mods.mod('siege', this, siegePower(a.units) + menCount(a.units) * 0.02, a) * dt);
       if (c.wallHp <= 0) {
         const pl = this.player;
         if (pl && (c.owner === pl.id || a.owner === pl.id)) this.notify('Стены города ' + c.name + ' пробиты!', c.owner === pl.id ? 'bad' : 'war', c);
@@ -933,7 +934,7 @@ class Game {
       for (const j in dG) if (UNITS[j] && c.garrison && wallsUp) dG[j] *= 1;
       const dA = this.damage(a.units, c.garrison, { volley, mult: this.moraleMult(a), dt, walls: wallsUp, wallsUp });
       lossB += this.applyDamage(c.garrison, c.wounds, dA, 1 / (1 + bonus));
-      lossA += this.applyDamage(a.units, a.wounds, dG, 1);
+      lossA += this.applyDamage(a.units, a.wounds, dG, Mods.mod('defense', this, 1, a));
     }
     btl.lossA += lossA; btl.lossB += lossB;
     this.creditKills(c.owner, a.owner, lossA);
