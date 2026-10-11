@@ -298,7 +298,7 @@ const FrontsUI = {
         me.setMulti(ui, ids);
         Sfx.play('click');
       },
-      cancel() { me.drag = null; },
+      cancel(input, pinch) { me.drag = null; if (!pinch) ui.updateHint(); },
     };
   },
   // Линия фронта: ведём палец, при отпускании линия сглаживается и становится фронтом.
@@ -329,7 +329,7 @@ const FrontsUI = {
         ui.select({ kind: 'kingdom' });
         ui.toast(f.name + (me.lineFor.length ? ': дивизии занимают позиции' : ' проведена; назначьте дивизии'), true);
       },
-      cancel() { me.drag = null; },
+      cancel(input, pinch) { me.drag = null; if (!pinch) ui.updateHint(); },
     };
   },
 };

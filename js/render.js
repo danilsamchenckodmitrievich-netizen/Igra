@@ -31,6 +31,7 @@ class Renderer {
     this.time = 0;
     this.particles = [];
     this.selected = null;
+    this.plateCache = new Map();
     this.hl = null;          // Set id дивизий, выбранных рамкой или армией целиком (подсветка плашек)
     this.hover = null;
     this.marker = null;
@@ -800,12 +801,12 @@ class Renderer {
         if (c) { ax = c.x + 0.5 + this.cityRadius(c) + 0.55; ay = c.y + 0.75; }
       }
       const p = this.toScreen(ax, ay);
-      const W = Math.max(38, S * 1.55);
+      const W = this.plateSize(S).W;
       for (const q of placed) if (Math.abs(q.x - p.x) < W * 0.9 && Math.abs(q.y - p.y) < S * 0.5) p.y = q.y - S * 0.52;
       placed.push({ x: p.x, y: p.y });
       const bob = a.state === 'move' || a.state === 'retreat' ? Math.abs(Math.sin(this.time * 7 + a.id)) * 2.5 : 0;
       const x = p.x, y = p.y - S * 0.45 - bob;
-      this.drawnArmies.push({ a, x, y, r: Math.max(W, S) * 0.52 });
+      this.drawnArmies.push({ a, x, y, r: W * 0.5 });
       ctx.fillStyle = 'rgba(30,18,8,0.3)';
       ctx.beginPath(); ctx.ellipse(p.x, p.y, S * 0.5, S * 0.14, 0, 0, TAU); ctx.fill();
       this.drawPlate(ctx, a, x, y, S, false);
@@ -813,51 +814,78 @@ class Renderer {
   }
 
   // Плашка дивизии, как в HOI4: значок шаблона на цвете державы, число воинов, полоски численности и организованности.
+  // Основа (корпус, значок, рамка) и числа лежат в кэше спрайтов; каждый кадр рисуются только полоски.
+  plateSize(S) { return { W: Math.max(54, Math.round(S * 1.9)), H: Math.max(22, Math.round(S * 0.74)) }; }
+  plateBase(k, icon, gcol, flag, W, H) {
+    const dpr = this.dpr, key = k.color + k.dark + icon + (gcol || '-') + flag + W + 'x' + H + '@' + dpr;
+    let e = this.plateCache.get(key);
+    if (e) return e;
+    if (this.plateCache.size > 360) this.plateCache.clear();
+    const pad = 4, cv = document.createElement('canvas');
+    cv.width = Math.ceil((W + pad * 2) * dpr); cv.height = Math.ceil((H + pad * 2) * dpr);
+    const c = cv.getContext('2d');
+    c.scale(dpr, dpr); c.translate(pad, pad);
+    c.fillStyle = 'rgba(20,12,5,0.35)';
+    this.roundRect(c, 1, 2, W, H, 4); c.fill();
+    c.fillStyle = 'rgba(28,17,8,0.93)';
+    this.roundRect(c, 0, 0, W, H, 4); c.fill();
+    c.save();
+    this.roundRect(c, 0, 0, W, H, 4); c.clip();
+    c.fillStyle = k.color; c.fillRect(0, 0, H, H);
+    c.fillStyle = 'rgba(0,0,0,0.22)'; c.fillRect(H - 3, 0, 3, H);
+    if (gcol) { c.fillStyle = gcol; c.fillRect(H, 0, W - H, 2.5); }
+    c.restore();
+    Icons.draw(c, icon, H / 2, H / 2, H * 0.66, '#fff6dc');
+    // рамка: выбранная — золотая, выделенная рамкой — светлая пунктирная, обычная — цвета державы
+    c.lineWidth = flag === 1 ? 2.5 : 1.5;
+    c.strokeStyle = flag === 1 ? '#ffe28a' : flag === 2 ? '#fff3c8' : k.dark;
+    if (flag === 2) c.setLineDash([4, 3]);
+    this.roundRect(c, 0, 0, W, H, 4); c.stroke();
+    e = { cv, pad, w: cv.width / dpr, h: cv.height / dpr };
+    this.plateCache.set(key, e);
+    return e;
+  }
+  plateNum(txt, color, px) {
+    const dpr = this.dpr, key = 'n' + txt + color + px + '@' + dpr;
+    let e = this.plateCache.get(key);
+    if (e) return e;
+    const font = '700 ' + px + 'px "PT Sans Narrow", "Arial Narrow", sans-serif';
+    const m = this.ctx;
+    m.save(); m.font = font; const tw = Math.ceil(m.measureText(txt).width) + 2; m.restore();
+    const cv = document.createElement('canvas');
+    cv.width = Math.ceil(tw * dpr); cv.height = Math.ceil((px + 3) * dpr);
+    const c = cv.getContext('2d');
+    c.scale(dpr, dpr); c.font = font; c.textAlign = 'right'; c.fillStyle = color;
+    c.fillText(txt, tw - 1, px);
+    e = { cv, w: tw, h: px + 3 };
+    this.plateCache.set(key, e);
+    return e;
+  }
   drawPlate(ctx, a, cx, cy, S, near) {
     const g = this.g, k = g.kingdom(a.owner), t = Fronts.tpl(g, a.owner, a.tpl);
-    const W = Math.max(38, S * 1.55), H = Math.max(21, S * 0.72), x = Math.round(cx - W / 2), y = Math.round(cy - H / 2);
+    const { W, H } = this.plateSize(S), x = Math.round(cx - W / 2), y = Math.round(cy - H / 2), dpr = this.dpr;
     const sel = this.selected && this.selected.kind === 'army' && this.selected.id === a.id;
-    const hl = !sel && this.hl && this.hl.has(a.id);
+    const flag = sel ? 1 : this.hl && this.hl.has(a.id) ? 2 : 0;
     const men = menCount(a.units), full = Math.max(men, t ? menCount(t.units) : men);
     const org = (a.org === undefined ? 100 : a.org) / 100;
     const grp = a.group !== null && a.group !== undefined ? Fronts.group(g, a.group) : null;
-    ctx.save();
-    ctx.fillStyle = 'rgba(20,12,5,0.35)';
-    this.roundRect(ctx, x + 1, y + 2, W, H, 4); ctx.fill();
-    ctx.fillStyle = 'rgba(28,17,8,0.93)';
-    this.roundRect(ctx, x, y, W, H, 4); ctx.fill();
-    // значок шаблона на цвете державы
-    ctx.save();
-    this.roundRect(ctx, x, y, W, H, 4); ctx.clip();
-    ctx.fillStyle = k.color; ctx.fillRect(x, y, H, H);
-    ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(x + H - 3, y, 3, H);
-    if (grp) { ctx.fillStyle = grp.color; ctx.fillRect(x + H, y, W - H, 2.5); }
-    ctx.restore();
-    Icons.draw(ctx, Fronts.icon(g, a), x + H / 2, y + H / 2 - 1, H * 0.66, '#fff6dc');
-    // число воинов и полоски
-    const bx = x + H + 3, bw = W - H - 6;
-    ctx.font = '700 ' + Math.round(Math.max(10, H * 0.42)) + 'px "PT Sans Narrow", "Arial Narrow", sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillStyle = a.state === 'retreat' ? '#ffb0a0' : '#fff3d6';
-    ctx.fillText(men >= 1000 ? (men / 1000).toFixed(1) + 'к' : String(men), x + W - 3, y + H * 0.5);
-    const bh = Math.max(2.5, H * 0.14);
-    ctx.fillStyle = 'rgba(255,255,255,0.14)';
-    ctx.fillRect(bx, y + H - bh * 2 - 3, bw, bh); ctx.fillRect(bx, y + H - bh - 2, bw, bh);
-    ctx.fillStyle = '#e9c264'; ctx.fillRect(bx, y + H - bh * 2 - 3, bw * Math.min(1, men / full), bh);
+    const e = this.plateBase(k, Fronts.icon(g, a), grp ? grp.color : null, flag, W, H);
+    ctx.drawImage(e.cv, x - e.pad, y - e.pad + 1, e.w, e.h);
+    const fpx = Math.round(Math.max(10, H * 0.42));
+    const ns = this.plateNum(men >= 1000 ? (men / 1000).toFixed(1) + 'к' : String(men), a.state === 'retreat' ? '#ffb0a0' : '#fff3d6', fpx);
+    ctx.drawImage(ns.cv, x + W - 3 - ns.w + 1, y + 3 + (grp ? 1 : 0), ns.w, ns.h);
+    const bx = x + H + 3, bw = W - H - 7, bh = Math.max(3, Math.round(H * 0.14)), by = y + H - bh * 2 - 4;
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.fillRect(bx, by, bw, bh); ctx.fillRect(bx, by + bh + 1, bw, bh);
+    ctx.fillStyle = '#e9c264'; ctx.fillRect(bx, by, Math.round(bw * Math.min(1, men / full)), bh);
     ctx.fillStyle = org > 0.6 ? '#79b743' : org > 0.3 ? '#e0a63a' : '#d4492b';
-    ctx.fillRect(bx, y + H - bh - 2, bw * org, bh);
-    // рамка: выбранная — золотая, выделенная рамкой — светлая пунктирная, обычная — цвета державы
-    ctx.lineWidth = sel ? 2.5 : 1.5;
-    ctx.strokeStyle = sel ? '#ffe28a' : hl ? '#fff3c8' : k.dark;
-    if (hl) ctx.setLineDash([4, 3]);
-    this.roundRect(ctx, x, y, W, H, 4); ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.fillRect(bx, by + bh + 1, Math.round(bw * org), bh);
     // состояние
-    if (a.state === 'siege') Icons.draw(ctx, 'target', x + W, y, 13, '#ffcf7a');
-    else if (a.state === 'retreat') Icons.draw(ctx, 'flag', x + W, y, 13, '#ffffff');
-    else if (a.state === 'battle') Icons.draw(ctx, 'swords', x + W, y, 13, '#ff9a7a');
+    const st = a.state;
+    if (st === 'siege') Icons.draw(ctx, 'target', x + W, y, 13, '#ffcf7a');
+    else if (st === 'retreat') Icons.draw(ctx, 'flag', x + W, y, 13, '#ffffff');
+    else if (st === 'battle') Icons.draw(ctx, 'swords', x + W, y, 13, '#ff9a7a');
     else if ((a.entrench || 0) > 0.5) Icons.draw(ctx, 'shield', x + W, y, 11, '#cfe2a8');
-    ctx.restore();
   }
 
   // Многодивизионные бои вблизи: art-units.js рисует схватку двух ведущих дивизий; остальные участники
