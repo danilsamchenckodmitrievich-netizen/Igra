@@ -641,6 +641,11 @@ const Fronts = {
     const st = this.state(g);
     const alive = new Set();
     for (const a of g.armies) {
+      // бой или осада закончились без участия дивизии (мир, роспуск): она свободна
+      if ((a.state === 'battle' || a.state === 'siege') && (a.battleId === null || a.battleId === undefined || !g.battleOf(a))) {
+        if (a.state === 'siege') g.leaveSiege(a);
+        a.state = 'idle'; a.battleId = null; a.dest = null; a.path = null;
+      }
       if (a.group !== null && a.group !== undefined) alive.add(a.group);
       if (a.front !== null && a.front !== undefined && !this.front(g, a.front)) a.front = null;
     }

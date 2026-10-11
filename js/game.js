@@ -871,6 +871,13 @@ class Game {
   tickField(btl, dt) {
     this.pullIn(btl);
     let A = this.sideArmies(btl, 'a'), B = this.sideArmies(btl, 'b');
+    // заключили мир посреди боя: дивизии, у которых напротив не осталось врагов, выходят из сражения
+    const foes = (X, Y) => X.filter(d => Y.some(e => this.isHostile(d.owner, e.owner)));
+    const A2 = foes(A, B), B2 = foes(B, A);
+    if (A2.length !== A.length || B2.length !== B.length) {
+      for (const d of A.concat(B)) if (A2.indexOf(d) < 0 && B2.indexOf(d) < 0) { this.dropFromBattle(btl, d); d.state = 'idle'; d.immuneUntil = this.time + 3; }
+      A = A2; B = B2;
+    }
     btl.sideA = A.map(x => x.id); btl.sideB = B.map(x => x.id);
     if (!A.length || !B.length) { this.finishField(btl, A.length ? 'a' : B.length ? 'b' : null); return; }
     btl.a = A[0].id; btl.b = B[0].id;
@@ -1098,7 +1105,7 @@ class Game {
     const parts = [];
     if (c) for (const id of btl.sideA) {
       const x = this.army(id);
-      if (x && x.state === 'siege' && x.siegeCity === c.id && x.owner !== c.owner) parts.push(x);
+      if (x && x.state === 'siege' && x.siegeCity === c.id && x.owner !== c.owner && this.isHostile(x.owner, c.owner)) parts.push(x);
     }
     if (!c || !parts.length) {
       this.battles = this.battles.filter(x => x !== btl);

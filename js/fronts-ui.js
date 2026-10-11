@@ -93,6 +93,7 @@ const FrontsUI = {
         `<button class="act ghost" type="button" data-act="split">Разделить</button><button class="act ghost" type="button" data-act="merge">Слить</button></div>`;
       if (this.pick) h += this.pickHtml(ui, [a]);
     }
+    h += '<div class="row2" style="display:none"></div>';   // сюда полководцы (js/heroes.js) вставляют свой блок
     const org = a.org === undefined ? 100 : a.org;
     h += '<div class="dbars">' + this.bar('Организованность', org, 'org ' + this.orgCls(org)) +
       this.bar('Опыт', a.xp || 0, 'xp', Math.round((a.xp || 0) / DIV.xpMax * DIV.xpAtk * 100) > 0 ? '+' + Math.round((a.xp || 0) / DIV.xpMax * DIV.xpAtk * 100) + '% к урону' : 'новобранцы') +
