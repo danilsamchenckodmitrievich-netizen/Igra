@@ -237,28 +237,47 @@ class Game {
 
   // ---------- влияние и земли ----------
   // Сила влияния города — на сколько клеток он держит землю. Вклады в клетках (enemies ≤ 0),
-  // reach = их сумма в пределах INFLUENCE.min…max. Вольные города: только база (чуть выше) и гарнизон.
+  // reach = их сумма в пределах INFLUENCE.min…max; parts — те же вклады с подписями для панели.
+  // Развитие (уровень, жители, постройки) и гарнизон задают «мирную» дальность R. Свои войска, стоящие
+  // на землях города (world.cityOf), держат землю полностью, свои за границей (не дальше armyNear от R) —
+  // частично; враждебные войска на землях или ближе R теснят, осада — сильно. На марше войска весят меньше.
+  // Вольные города: только база (чуть выше) и гарнизон.
   cityInfluence(c) {
-    const I = INFLUENCE, free = c.owner === -1;
-    const out = { reach: 0, base: (I.base[c.level] || I.base[1]) + (free ? I.freeBase[c.level] || 0 : 0), pop: 0, garrison: 0, armies: 0, enemies: 0 };
+    const I = INFLUENCE, free = c.owner === -1, w = this.world;
+    const out = { reach: 0, base: (I.base[c.level] || I.base[1]) + (free ? I.freeBase[c.level] || 0 : 0), build: 0, pop: 0, garrison: 0, armies: 0, enemies: 0 };
     out.garrison = Math.min(I.garrisonMax, I.garrison * Math.sqrt(menCount(c.garrison) / 10));
     if (!free) {
+      let lv = (c.walls || 0) + (c.towers || 0);
+      for (const b in c.buildings) lv += c.buildings[b];
+      out.build = Math.min(I.buildMax, I.build * Math.sqrt(lv));
       out.pop = I.pop * Math.sqrt(Math.max(0, c.pop) / 400);
+      const R = out.base + out.build + out.pop + out.garrison, far = R + I.armyNear;
       const cx = c.x + 0.5, cy = c.y + 0.5;
       let own = 0, foe = 0;
       for (const a of this.armies) {
         const dx = a.x - cx, dy = a.y - cy;
-        if (Math.abs(dx) > I.armyR || Math.abs(dy) > I.armyR) continue;
+        if (Math.abs(dx) > far || Math.abs(dy) > far) continue;
         const d = Math.sqrt(dx * dx + dy * dy);
-        const s = Math.sqrt(menCount(a.units) / 10);
-        if (a.owner === c.owner) { if (d < I.armyR) own += I.army * s * (1 - d / I.armyR); }
-        else if (d < I.enemyR) foe += I.enemy * s * (1 - d / I.enemyR);
+        const t = w.tileAt(a.x, a.y), onLand = t >= 0 && w.cityOf[t] === c.id;
+        const s = Math.sqrt(menCount(a.units) / 10) * (a.state === 'move' || a.state === 'retreat' ? I.moving : 1);
+        if (a.owner === c.owner) {
+          if (onLand) own += I.army * s;
+          else if (d < far) own += I.army * s * I.armyOut * Math.min(1, (far - d) / I.armyNear);
+        } else if ((onLand || d < R) && this.isHostile(a.owner, c.owner)) foe += I.enemy * s * (0.5 + 0.5 * Math.max(0, 1 - d / R));
       }
       if (c.siegeBy) foe += I.siege;
       out.armies = Math.min(I.armyMax, own);
       out.enemies = -Math.min(I.enemyMax, foe);
     }
-    out.reach = clamp(Mods.mod('influence', this, out.base + out.pop + out.garrison + out.armies + out.enemies, c, out), I.min, I.max);
+    let sum = 0;
+    for (const k in out) if (k !== 'reach') sum += out[k];
+    out.reach = clamp(Mods.mod('influence', this, sum, c, out), I.min, I.max);
+    // разбивка для панели: нулевые вклады (кроме самого города) не показываем
+    out.parts = [];
+    for (const k in out) {
+      if (k === 'reach' || k === 'parts' || typeof out[k] !== 'number' || (k !== 'base' && Math.abs(out[k]) < 0.05)) continue;
+      out.parts.push({ name: I.labels[k] || k, value: out[k] });
+    }
     return out;
   }
   // Перекроить земли, если чья-то сила заметно изменилась или город сменил хозяина (force — сразу).
@@ -478,7 +497,7 @@ class Game {
       for (const r in conv.output) { const v = conv.output[r] * factoryLv * f * mult; parts.factory[r] += v; total[r] += v; }
       parts.factoryWork = f;
     }
-    return { total, parts };
+    return { total: Mods.mod('income', this, total, k, parts), parts };
   }
 
   // ---------- армии ----------
@@ -507,7 +526,7 @@ class Game {
     return Mods.mod('armySpeed', this, s, a);
   }
   armyVision(a) {
-    return a.units.scout ? UNITS.scout.vision : COMBAT.armyVision;
+    return Mods.mod('vision', this, a.units.scout ? UNITS.scout.vision : COMBAT.armyVision, a);
   }
 
   // Вывести войска из гарнизона в поле.
@@ -763,7 +782,7 @@ class Game {
     const k = this.kingdom(a.owner);
     let m = 0.55 + a.morale / 220;
     if (k && (k.unpaid || k.starving)) m *= 0.85;
-    return m;
+    return Mods.mod('attack', this, m, a);
   }
   terrainDef(x, y) {
     const i = this.world.tileAt(x, y);
@@ -955,6 +974,7 @@ class Game {
   }
 
   capture(c, a) {
+    if (Mods.mod('capture', this, false, c, a)) return;   // модуль сам распорядился городом (например, мятеж)
     const old = this.kingdom(c.owner);
     const ak = this.kingdom(a.owner);
     c.siegeBy = null;
@@ -1139,7 +1159,7 @@ class Game {
     const L = CITY_LEVELS[c.level];
     // население
     if (k && k.starving) c.pop = Math.max(50, c.pop - c.pop * ECON.starve * dt / 60);
-    else if (c.pop < L.popMax && !c.siegeBy) c.pop = Math.min(L.popMax, c.pop + (c.pop * ECON.growth + 10) * (1 - c.pop / L.popMax * 0.6) * dt / 60);
+    else if (c.pop < L.popMax && !c.siegeBy) c.pop = Math.min(L.popMax, c.pop + Mods.mod('growth', this, (c.pop * ECON.growth + 10) * (1 - c.pop / L.popMax * 0.6), c) * dt / 60);
     // ремонт стен
     if (c.walls > 0 && !c.siegeBy && c.wallHp < WALLS[c.walls].hp) c.wallHp = Math.min(WALLS[c.walls].hp, c.wallHp + WALLS[c.walls].hp * 0.012 * dt);
     // вольные города понемногу восполняют гарнизон
@@ -1200,7 +1220,7 @@ class Game {
         }
       }
     };
-    for (const c of this.cities) if (c.owner === pl.id) mark(c.x + 0.5, c.y + 0.5, 6 + c.level);
+    for (const c of this.cities) if (c.owner === pl.id) mark(c.x + 0.5, c.y + 0.5, Mods.mod('vision', this, 6 + c.level, c));
     for (const a of this.armies) if (a.owner === pl.id) mark(a.x, a.y, this.armyVision(a));
     let changed = false;
     for (let i = 0; i < vis.length; i++) if (vis[i] && !this.explored[i]) { this.explored[i] = 1; changed = true; }
@@ -1261,6 +1281,7 @@ class Game {
     this.eventT -= dt;
     if (this.eventT > 0) return;
     this.eventT = 110 + this.rng.range(0, 90);
+    if (Mods.mod('randomEvent', this, false)) return;   // событие разыграл модуль общества
     const pl = this.player;
     const cs = this.citiesOf(pl.id);
     if (!cs.length) return;

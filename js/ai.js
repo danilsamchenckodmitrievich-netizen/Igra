@@ -17,6 +17,8 @@ const AI = {
     if (!cities.length) return;
     const inc = g.income(k).total;
     const ctx = { cities, inc, threats: this.threats(g, k, cities) };
+    // общество (js/society.js): ставка налога, изучение знаний, войска в неспокойные города, наёмники
+    if (typeof Society !== 'undefined') Society.ai(g, k, ctx);
     this.economy(g, k, ctx);
     this.recruit(g, k, ctx);
     Mods.call('aiThink', g, k, ctx);   // дипломатия и прочие модули
@@ -161,7 +163,7 @@ const AI = {
 
   minGarrison(g, k, c, ctx) {
     const threat = ctx.threats.filter(t => t.city === c).reduce((s, t) => s + t.power, 0);
-    return (c.isCapital ? 260 : 110) + c.level * 30 + threat * 0.4;
+    return (c.isCapital ? 260 : 110) + c.level * 30 + threat * 0.4 + Mods.mod('aiGarrison', g, 0, c);
   },
 
   military(g, k, ctx) {
