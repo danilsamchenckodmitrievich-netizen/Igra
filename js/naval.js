@@ -17,12 +17,12 @@ const NAVAL = {
   offerGain: 20,        // …и выигрыш не меньше стольких секунд
   ships: {
     transport: {
-      name: 'Транспорт', short: 'Трансп.', icon: 'ship', need: 1, cap: 120, hp: 140, speed: 2.2, atk: 0, range: 0, vision: 5,
+      name: 'Транспорт', acc: 'транспорт', fem: '', short: 'Трансп.', icon: 'ship', need: 1, cap: 120, hp: 140, speed: 2.2, atk: 0, range: 0, vision: 5,
       cost: { gold: 110, wood: 170 }, time: 18, crew: 15, upkeep: 1.5,
       desc: 'Везёт армию до 120 воинов к любому берегу. Сам не сражается и уязвим для боевых ладей.',
     },
     galley: {
-      name: 'Боевая ладья', short: 'Ладья', icon: 'ship', need: 2, cap: 0, hp: 150, speed: 2.5, atk: 9, range: 3.6, vision: 6.5,
+      name: 'Боевая ладья', acc: 'боевую ладью', fem: 'а', short: 'Ладья', icon: 'ship', need: 2, cap: 0, hp: 150, speed: 2.5, atk: 9, range: 3.6, vision: 6.5,
       cost: { gold: 170, wood: 200, iron: 25 }, time: 26, crew: 30, upkeep: 3,
       desc: 'Топит чужие корабли и прикрывает свои транспорты. Для постройки нужна верфь (порт 2 ур.).',
     },
@@ -306,6 +306,15 @@ const Naval = (() => {
       const last = tr[tr.length - 1];
       if (!last || dist(last.x, last.y, sh.x, sh.y) > 0.22) { tr.push({ x: sh.x, y: sh.y, t: g.time }); if (tr.length > 16) tr.shift(); }
     }
+    // ладья на охоте встаёт на дистанции выстрела, а не лезет борт о борт
+    if (sh.act === 'chase' && SPECS[sh.kind].atk) {
+      const rg = SPECS[sh.kind].range * 0.7;
+      for (const o of N.ships) {
+        if (o.hp <= 0 || !g.isHostile(sh.owner, o.owner) || dist(sh.x, sh.y, o.x, o.y) >= rg) continue;
+        sh.path = null; sh.dest = null; sh.st = 'idle'; sh.act = null; sh.idleT = 0;
+        return;
+      }
+    }
     if (sh.pi >= sh.path.length) arrive(g, N, sh);
   }
   function arrive(g, N, sh) {
@@ -371,7 +380,7 @@ const Naval = (() => {
       y.q.shift();
       if (!y.q.length) delete N.yards[cid];
       const sh = addShip(g, N, c.owner, q.kind, c);
-      say(g, c.owner, c.name + ': ' + SPECS[q.kind].name.toLowerCase() + ' спущен на воду', 'good', c);
+      say(g, c.owner, c.name + ': ' + SPECS[q.kind].name.toLowerCase() + ' спущен' + SPECS[q.kind].fem + ' на воду', 'good', c);
       g.emit('shipBuilt', { city: c, ship: sh });
     }
   }
@@ -540,7 +549,11 @@ const Naval = (() => {
     if (sh.job) return 'Корабль ждёт армию';
     sh.mission = null;
     sh.manual = true;
-    if (w.isWater(i)) return sailTo(g, sh, x, y);
+    if (w.isWater(i)) {
+      // приказ плыть к вражескому кораблю — атака: ладья подходит на дистанцию выстрела
+      const hunt = SPECS[sh.kind].atk && N.ships.some(o => o.hp > 0 && g.isHostile(sh.owner, o.owner) && dist(o.x, o.y, x, y) < 1.3);
+      return sailTo(g, sh, x, y, hunt ? 'chase' : null);
+    }
     let target = { kind: 'ground', x, y };
     const c = g.cityAt(x, y, 1.1);
     if (c) target = { kind: 'city', id: c.id };
@@ -612,11 +625,11 @@ const Naval = (() => {
     if (sh.cargo) {
       const n = menCount(sh.cargo.units);
       if (killer !== null) g.creditKills(killer, sh.owner, n);
-      say(g, sh.owner, SPECS[sh.kind].name + ' потоплен вместе с армией: погибло ' + men(n), 'bad', sh, true);
+      say(g, sh.owner, SPECS[sh.kind].name + ' потоплен' + SPECS[sh.kind].fem + ' вместе с армией: погибло ' + men(n), 'bad', sh, true);
       if (by) say(g, killer, 'Мы потопили транспорт с армией: ' + men(n), 'good', sh);
     } else {
-      say(g, sh.owner, SPECS[sh.kind].name + ' потоплен', 'bad', sh, true);
-      if (by) say(g, killer, 'Мы потопили ' + SPECS[sh.kind].name.toLowerCase(), 'good', sh);
+      say(g, sh.owner, SPECS[sh.kind].name + ' потоплен' + SPECS[sh.kind].fem, 'bad', sh, true);
+      if (by) say(g, killer, 'Мы потопили ' + SPECS[sh.kind].acc, 'good', sh);
     }
     g.fx.push({ type: 'sunk', x: sh.x, y: sh.y, t: 0, dur: 2.6, ang: sh.ang, kind: sh.kind, owner: sh.owner });
     g.fxBoom(sh.x, sh.y);
@@ -638,7 +651,7 @@ const Naval = (() => {
       tgt.hurt = g.time;
       a.shoot = { id: tgt.id, t: g.time };
       if (tgt.hp <= 0 && !dead.some(d => d[0] === tgt)) dead.push([tgt, a]);
-      else if (tgt.hp > 0 && g.time - (tgt.warnT || -99) > 20) { tgt.warnT = g.time; say(g, tgt.owner, 'Вражеские корабли атакуют ' + SPECS[tgt.kind].name.toLowerCase(), 'bad', tgt, true); }
+      else if (tgt.hp > 0 && g.time - (tgt.warnT || -99) > 20) { tgt.warnT = g.time; say(g, tgt.owner, 'Вражеские корабли атакуют ' + SPECS[tgt.kind].acc, 'bad', tgt, true); }
     }
     for (const [t, by] of dead) sink(g, N, t, by);
   }
@@ -731,9 +744,9 @@ const Naval = (() => {
         delete N.yards[d.city.id];
         for (const sh of N.ships) {
           if (sh.dock !== d.city.id || sh.owner === d.city.owner) continue;
-          say(g, sh.owner, 'Мы потеряли ' + SPECS[sh.kind].name.toLowerCase() + ' в порту ' + d.city.name, 'bad', d.city);
+          say(g, sh.owner, 'Мы потеряли ' + SPECS[sh.kind].acc + ' в порту ' + d.city.name, 'bad', d.city);
           sh.owner = d.city.owner; sh.home = d.city.id; sh.job = null; sh.cargo = null; sh.mission = null;
-          say(g, sh.owner, 'В порту ' + d.city.name + ' захвачен ' + SPECS[sh.kind].name.toLowerCase(), 'good', d.city);
+          say(g, sh.owner, 'В порту ' + d.city.name + ' захвачен' + SPECS[sh.kind].fem + ' ' + SPECS[sh.kind].name.toLowerCase(), 'good', d.city);
         }
       });
       if (typeof document !== 'undefined' && Naval.ui) Naval.ui.setup(g);
@@ -770,7 +783,7 @@ const Naval = (() => {
             continue;
           }
           // свободный корабль возвращается в гавань
-          if (sh.st === 'idle' && !sh.manual && !sh.mission && !sh.job && sh.idleT > 12) {
+          if (sh.st === 'idle' && !sh.manual && !sh.mission && !sh.job && sh.idleT > 12 && !(sh.shoot && g.time - sh.shoot.t < 4)) {
             const h = harborOf(g, c);
             if (dist(sh.x, sh.y, h.wx, h.wy) > 2.2) sendHome(g, sh); else dockShip(g, N, sh, c);
           }
