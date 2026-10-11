@@ -30,4 +30,13 @@ for (const a of g2.armies) {
 }
 for (const c of g2.cities) if (c.siegeBy && !g2.army(c.siegeBy)) bad.push('dangling siegeBy ' + c.name);
 for (const b of g2.battles) { if (!g2.army(b.a)) bad.push('btl missing a'); if (b.kind === 'field' && !g2.army(b.b)) bad.push('btl missing b'); for (const id of (b.sideA || []).concat(b.sideB || [])) if (!g2.army(id)) bad.push('btl missing member ' + id); }
+// флот: груз не дублируется на карте, причалы и заявки указывают на живое
+if (g2.naval) {
+  for (const sh of g2.naval.ships) {
+    if (sh.cargo && g2.army(sh.cargo.id)) bad.push('cargo army also on map ' + sh.id);
+    if (sh.dock && !g2.city(sh.dock)) bad.push('dangling dock ' + sh.id);
+    if (sh.job && !g2.naval.jobs.some(j => j.id === sh.job)) bad.push('dangling job ' + sh.id);
+  }
+  for (const j of g2.naval.jobs) if (!g2.army(j.army) || !g2.naval.ships.some(s => s.id === j.ship)) bad.push('stale job ' + j.id);
+}
 console.log('invariants:', bad.length ? bad.join('; ') : 'ok');

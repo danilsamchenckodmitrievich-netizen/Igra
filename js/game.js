@@ -335,6 +335,7 @@ class Game {
       let block = null;
       if (cur === 0 && this.usedSlots(c) >= CITY_LEVELS[c.level].slots) block = 'Нет свободных мест: повысьте уровень города';
       if (b.minLevel && c.level < b.minLevel) block = 'Нужен ' + CITY_LEVELS[b.minLevel].name.toLowerCase() + ' или больше';
+      if (b.when) block = b.when(this, c) || block;   // особое условие здания (порт — только у воды)
       return { to, cost: this.buildingCost(id, to), time: this.buildingTime(id, to), block, name: b.name };
     }
     if (kind === 'walls') {
@@ -606,12 +607,17 @@ class Game {
     // та же осада — не прерываем
     if (a.state === 'siege' && target.kind === 'city' && a.siegeCity === target.id) return null;
     if (a.state === 'siege') this.endSiege(a, false);
-    if (!this.setPath(a, tx, ty)) return 'Туда не пройти';
+    if (!this.setPath(a, tx, ty)) {
+      // по суше не пройти: модуль флота может предложить море (null — приказ принят, строка — причина отказа)
+      const r = Mods.mod('orderFail', this, undefined, a, target, { x: tx, y: ty });
+      return r === undefined ? 'Туда не пройти' : r;
+    }
     a.dest = { ...target };
     a.state = 'move';
     a.lastRepath = this.time;
     // в свой город дивизия входит гарнизоном, только если её туда и послали
     a.enter = target.kind === 'city' && this.city(target.id).owner === a.owner;
+    Mods.call('orderDone', this, a, target);
     return null;
   }
   stop(a) {
@@ -1461,6 +1467,7 @@ class Game {
     };
     for (const c of this.cities) if (c.owner === pl.id) mark(c.x + 0.5, c.y + 0.5, Mods.mod('vision', this, 6 + c.level, c));
     for (const a of this.armies) if (a.owner === pl.id) mark(a.x, a.y, this.armyVision(a));
+    Mods.call('vision', this, mark);
     let changed = false;
     for (let i = 0; i < vis.length; i++) if (vis[i] && !this.explored[i]) { this.explored[i] = 1; changed = true; }
     if (changed) this.exploredVersion = (this.exploredVersion || 0) + 1;
