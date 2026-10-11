@@ -372,6 +372,7 @@ const Fronts = {
   },
   setMode(g, f, mode) {
     f.mode = mode === 'attack' ? 'attack' : 'hold';
+    f.askT = undefined;
     for (const a of g.armies) if (a.front === f.id) a.fT = -99;
   },
   frontDivs(g, f) { return g.armies.filter(a => a.front === f.id); },
@@ -679,7 +680,18 @@ const Fronts = {
       }
       for (const a of divs) rt.slots.set(a.id, rt.assign.get(a.id));
     }
-    if (f.mode === 'attack') this.attack(g, f, rt, divs);
+    let atk = f.mode === 'attack';
+    if (atk && f.kind === 'border' && f.enemy >= 0 && !g.isHostile(f.owner, f.enemy)) {
+      // с противником мир: наступать нельзя, пока не объявлена война — игроку предлагаем объявить её (один раз), ИИ держит линию
+      atk = false;
+      if (k.isPlayer && f.askT === undefined) {
+        f.askT = g.time;
+        let cc = null, bd = Infinity;
+        for (const c of g.cities) if (c.owner === f.enemy) { const d = dist(c.x, c.y, divs[0].x, divs[0].y); if (d < bd) { bd = d; cc = c; } }
+        if (cc) g.emit('peaceBlock', { army: divs[0], owner: f.enemy, target: { kind: 'city', id: cc.id } });
+      } else if (!k.isPlayer) f.mode = 'hold';
+    }
+    if (atk) this.attack(g, f, rt, divs);
     else for (const a of divs) { const s = rt.slots.get(a.id); if (s) this.goHold(g, a, s); }
   },
   // Встать на своё место на линии и держать оборону (окапываться).

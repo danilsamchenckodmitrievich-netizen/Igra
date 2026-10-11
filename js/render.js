@@ -789,7 +789,20 @@ class Renderer {
     if (z >= UnitArt.FORMATION_Z) {
       const undo = this.pairBattles(list);
       try { UnitArt.drawArmies(this, ctx, list); } finally { undo(); }
-      for (const d of this.drawnArmies) this.drawPlate(ctx, d.a, d.x, d.y - Math.max(d.r, S * 0.62) - S * 0.42, S, true);
+      // плашки соседних дивизий не налезают друг на друга: передние остаются над строем, дальние поднимаются выше
+      const pz = this.plateSize(S), put = [], spots = [];
+      for (let i = this.drawnArmies.length - 1; i >= 0; i--) {
+        const d = this.drawnArmies[i];
+        const x = d.x; let y = d.y - Math.max(d.r, S * 0.62) - S * 0.42;
+        for (let k = 0; k < 5; k++) {
+          let hit = null;
+          for (const q of spots) if (Math.abs(q.x - x) < pz.W * 0.96 && Math.abs(q.y - y) < pz.H * 1.04) { hit = q; break; }
+          if (!hit) break;
+          y = hit.y - pz.H * 1.08;
+        }
+        spots.push({ x, y }); put[i] = y;
+      }
+      for (let i = 0; i < this.drawnArmies.length; i++) { const d = this.drawnArmies[i]; this.drawPlate(ctx, d.a, d.x, put[i], S, true); }
       return;
     }
     const placed = [];

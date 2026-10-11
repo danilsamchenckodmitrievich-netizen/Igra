@@ -388,7 +388,7 @@ function drawFrontsLayer(ctx, r, z, tl, br) {
         const L = Math.hypot(dx, dy);
         if (L < 0.6) continue;
         dx /= L; dy /= L;
-        const wd = (3.5 + Math.min(4, a.n) * 1.1) * px, head = (10 + Math.min(4, a.n) * 1.6) * px;
+        const wd = (5 + Math.min(4, a.n) * 1.4) * px, head = (15 + Math.min(4, a.n) * 2) * px;
         const ex = a.x1 - dx * 0.55, ey = a.y1 - dy * 0.55, bx = ex - dx * head, by2 = ey - dy * head;
         const c = a.foe ? '#d6402a' : col;
         ctx.setLineDash([9 * px, 6 * px]); ctx.lineDashOffset = -t * 16 * px;
