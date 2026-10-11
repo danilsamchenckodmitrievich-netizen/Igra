@@ -521,6 +521,11 @@ table.t tr.click:hover td { background: rgba(215, 169, 68, 0.15); }
   .tabs button { font-size: 16px; }
   .sheet { padding: 16px 18px 14px; }
   .logo { font-size: 38px; }
+  #pause .sheet { width: min(520px, 100%); }
+  #pause .sheet h2 { font-size: 26px; margin-bottom: 8px; }
+  #pause .stack { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-width: none; }
+  #pause .btn { padding: 8px 12px; font-size: 16px; }
+  #resume-btn { grid-column: 1 / -1; }
 }
 @media (max-width: 640px) {
   :root { --top: calc(env(safe-area-inset-top, 0px) + 76px); }

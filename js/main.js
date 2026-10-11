@@ -34,6 +34,7 @@ const App = {
       seed: 0,
     };
     Sfx.setMuted(!!p.muted);
+    Music.setEnabled(p.music !== false);
     this.bindMenus();
     window.addEventListener('resize', () => this.onResize());
     $('rotate-ok').addEventListener('click', () => {
@@ -52,7 +53,7 @@ const App = {
     console.info('korona-ready');
   },
 
-  savePrefs() { store(PREFS_KEY, { ...this.opts, seed: undefined, muted: Sfx.muted }); },
+  savePrefs() { store(PREFS_KEY, { ...this.opts, seed: undefined, muted: Sfx.muted, music: Music.enabled }); },
 
   // ---------- меню ----------
   bindMenus() {
@@ -67,6 +68,7 @@ const App = {
     $('resume-btn').addEventListener('click', () => this.togglePause());
     $('save-btn').addEventListener('click', () => { if (this.save()) { $('save-info').textContent = 'Сохранено: ' + this.game.dateText(); Sfx.play('done'); } });
     $('sound-btn').addEventListener('click', () => { Sfx.setMuted(!Sfx.muted); this.syncSound(); this.savePrefs(); });
+    $('music-btn').addEventListener('click', () => { Music.setEnabled(!Music.enabled, true); this.syncSound(); this.savePrefs(); });
     $('quit-btn').addEventListener('click', () => { this.save(); this.showMenu(); });
     $('menu-btn').addEventListener('click', () => this.togglePause());
     $('end-menu').addEventListener('click', () => this.showMenu());
@@ -81,7 +83,10 @@ const App = {
     for (const b of kp.children) b.addEventListener('click', () => { this.opts.kingdom = +b.dataset.i; this.renderNewGame(); });
     this.syncSound();
   },
-  syncSound() { $('sound-btn').textContent = Sfx.muted ? 'Звук: выкл.' : 'Звук: вкл.'; },
+  syncSound() {
+    $('sound-btn').textContent = Sfx.muted ? 'Звук: выкл.' : 'Звук: вкл.';
+    $('music-btn').textContent = Music.enabled ? 'Музыка: вкл.' : 'Музыка: выкл.';
+  },
   randomSeed() { return 1 + Math.floor(Math.random() * 999999); },
 
   screens() { return ['menu', 'newgame', 'pause', 'help', 'end']; },
@@ -156,6 +161,7 @@ const App = {
     $('hud').hidden = false;
     this.renderer.setGame(g);
     this.ui.bind(g);
+    Music.watch(g);
     g.on((type, d) => { if (type === 'gameover') setTimeout(() => this.showEnd(d), 1500); });
     const phone = Math.min(this.renderer.w, this.renderer.h) < 520;
     this.renderer.cam.z = phone ? 26 : 32;
@@ -214,6 +220,7 @@ const App = {
     $('end-sub').textContent = sub + ' Правление длилось ' + (years ? years + ' ' + plural(years, 'год', 'года', 'лет') + ' и ' : '') + (Math.floor(g.time / SEASON_LEN) % 4 + 1) + ' ' + plural(Math.floor(g.time / SEASON_LEN) % 4 + 1, 'сезон', 'сезона', 'сезонов') + '.';
     $('end-table').innerHTML = this.ui.endHtml(g);
     Sfx.play(d.win ? 'victory' : 'defeat');
+    Music.stinger(d.win ? 'win' : 'lose');
   },
   // кнопка «Назад» на Android
   back() {
@@ -284,6 +291,7 @@ const App = {
     if (this.frames === 120) console.info('korona-frames-ok');
     const g = this.game;
     if (g) {
+      Music.update(g, dt, this.mode, this.speed === 0);
       if (this.mode === 'menu') {
         this.simulate(dt * 2);
         this.updateAttract(dt);

@@ -1401,3 +1401,261 @@ const WorldArt = {
     }
   },
 };
+
+// ---------- стены вдоль границы и пристани (для строительства стен и флота) ----------
+// Контекст — в координатах мира (клетки), как у слоя RenderExt.map.
+// WorldArt.borderWall(ctx, x0, y0, x1, y1, level, kingdom, damage) — отрезок стены по границе:
+//   level 1 — частокол, 2 — каменная стена, 3 — крепостная с башенками; kingdom — держава (флажки, наверши) или null;
+//   damage — доля разрушения 0…1: от 0.35 — побита (выбиты зубцы, трещины), от 0.75 — проломы с завалами.
+//   Длинный отрезок режется на куски около клетки; кусок — готовый спрайт из кэша (8 направлений × уровень × урон),
+//   который ставится на отрезок сдвигом с сохранением вертикали, так что высота стены всегда смотрит вверх.
+//   Отрезки рисуйте сверху вниз по экрану (по возрастанию y), тогда ближние заслоняют дальние.
+// WorldArt.port(ctx, x, y, size, kingdom, dir?) — пристань: причал на сваях, склад, кран, лодка, бочки, флаг;
+//   x, y — точка на берегу; size — масштаб (1 ≈ клетка); dir — куда в воду выходит причал, радианы (по умолчанию на юг).
+Object.assign(WorldArt, {
+  wallSprites: new Map(),
+  wallPx: 0,
+  wallBake: { frame: -1, n: 0 },
+  // пикселей устройства на клетку по текущему преобразованию контекста, с округлением до ступени кэша
+  pptOf(ctx) {
+    let s = 32;
+    if (ctx.getTransform) { const m = ctx.getTransform(); s = Math.hypot(m.a, m.b); }
+    return s <= 30 ? 24 : s <= 60 ? 48 : 96;
+  },
+  rememberSprite(key, s) {
+    this.wallSprites.set(key, s);
+    this.wallPx += s.cv.width * s.cv.height;
+    if (this.wallPx > 5e6) {
+      for (const [k, v] of this.wallSprites) {
+        this.wallSprites.delete(k); this.wallPx -= v.cv.width * v.cv.height;
+        if (this.wallPx < 3.5e6) break;
+      }
+    }
+    return s;
+  },
+  // запекать не больше 12 новых кусков за кадр, остальные кадр-другой рисуются линией
+  canBake() {
+    const fr = typeof App !== 'undefined' && App.renderer ? App.renderer.frame : 0;
+    if (this.wallBake.frame !== fr) { this.wallBake.frame = fr; this.wallBake.n = 0; }
+    return this.wallBake.n++ < 12;
+  },
+
+  borderWall(ctx, x0, y0, x1, y1, level, kingdom, damage) {
+    level = clamp(level | 0, 1, 3);
+    let dx = x1 - x0, dy = y1 - y0;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-3) return;
+    // направление без знака: стена из A в B та же, что из B в A
+    if (dx < 0 || (dx === 0 && dy < 0)) { x0 = x1; y0 = y1; dx = -dx; dy = -dy; }
+    let k = Math.round((Math.atan2(dy, dx) + Math.PI / 2) / (Math.PI / 8)) - 1;
+    if (k < 0 || k > 7) k = 7;
+    const th = -Math.PI / 2 + (k + 1) * Math.PI / 8, cx = Math.cos(th), cy = Math.sin(th);
+    const ppt = this.pptOf(ctx), col = kingdom && kingdom.color ? kingdom.color : NEUTRAL_COLOR;
+    const dmg = damage >= 0.75 ? 2 : damage >= 0.35 ? 1 : 0;
+    const n = Math.max(1, Math.ceil(len - 0.25)), pdx = dx / n, pdy = dy / n;
+    // сдвиг, переводящий кусок спрайта (cx, cy) в настоящий (pdx, pdy) и сохраняющий вертикаль
+    let a, b, c2, d;
+    if (Math.abs(cx) > 0.3) { a = pdx / cx; b = (pdy - cy) / cx; c2 = 0; d = 1; }
+    else { a = 1; b = 0; c2 = (pdx - cx) / cy; d = pdy / cy; }
+    // сверху вниз: дальние куски раньше
+    for (let j = 0; j < n; j++) {
+      const i = pdy < 0 ? n - 1 - j : j;
+      const sx = x0 + pdx * i, sy = y0 + pdy * i;
+      const hs = this.hash(Math.round(sx * 4) * 7919 + Math.round(sy * 4) * 31, 51);
+      const deco = level === 3 ? (hs < 0.34 ? 2 : 0) : hs < 0.16 ? 1 : 0;
+      const pd = dmg === 2 && n > 1 && this.hash(Math.round(sx * 4) + Math.round(sy * 4) * 977, 53) < 0.45 ? 1 : dmg;
+      const key = level + '|' + pd + '|' + k + '|' + deco + '|' + ppt + '|' + col;
+      let s = this.wallSprites.get(key);
+      if (s) { this.wallSprites.delete(key); this.wallSprites.set(key, s); }
+      else if (this.canBake()) s = this.rememberSprite(key, this.bakeWallPiece(cx, cy, level, pd, col, deco, ppt));
+      ctx.save();
+      ctx.transform(a, b, c2, d, sx, sy);
+      if (s) ctx.drawImage(s.cv, s.x0, s.y0, s.w, s.h);
+      else {
+        ctx.strokeStyle = level === 1 ? '#8a6238' : '#b9ae97'; ctx.lineWidth = 0.08;
+        ctx.beginPath(); ctx.moveTo(0, -0.05); ctx.lineTo(cx, cy - 0.05); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  },
+  bakeWallPiece(cx, cy, level, dmg, col, deco, ppt) {
+    const top = level === 3 ? 0.34 : 0.26, up = deco === 2 ? 0.9 : deco === 1 ? 0.62 : top + 0.12;
+    const X0 = Math.min(0, cx) - 0.3, X1 = Math.max(0, cx) + 0.3, Y0 = Math.min(0, cy) - up, Y1 = Math.max(0, cy) + 0.22;
+    const cv = document.createElement('canvas');
+    cv.width = Math.ceil((X1 - X0) * ppt); cv.height = Math.ceil((Y1 - Y0) * ppt);
+    const g = cv.getContext('2d');
+    g.setTransform(ppt, 0, 0, ppt, -X0 * ppt, -Y0 * ppt);
+    g.lineJoin = 'round'; g.lineCap = 'round';
+    const o = { c: g, px: 1 / ppt, lw: Math.max(1.1 / ppt, 0.012), col, dmg: 0, rnd: mulberry32(level * 131 + dmg * 17 + deco * 7 + Math.round(cx * 100)) };
+    // пролом: от куска остаются два обломка по краям, посередине — завал
+    const runs = dmg === 2 ? [[0, 0.3], [0.7, 1]] : [[0, 1]];
+    if (level === 1) for (const r of runs) this.palisadeRun(o, cx, cy, r[0], r[1], dmg);
+    else for (const r of runs) this.stoneRun(o, cx, cy, r[0], r[1], level, dmg);
+    if (dmg === 2) this.rubble(o, cx * 0.5, cy * 0.5, level);
+    if (deco === 2) this.roundTower(o, 0, 0.02, 0.12, 0.42, 'slate', dmg === 2);
+    else if (deco === 1) { const h = level === 1 ? 0.2 : 0.22; this.pennant(o, 0, -h, 0.32); }
+    return { cv, x0: X0, y0: Y0, w: X1 - X0, h: Y1 - Y0 };
+  },
+  // частокол: две жерди и заострённые колья
+  palisadeRun(o, cx, cy, u0, u1, dmg) {
+    const c = o.c, L = Math.hypot(cx, cy) * (u1 - u0), n = Math.max(2, Math.round(L / 0.055));
+    c.strokeStyle = '#5a3d20'; c.lineWidth = 0.022;
+    c.beginPath();
+    for (const hh of [0.07, 0.15]) { c.moveTo(cx * u0, cy * u0 - hh); c.lineTo(cx * u1, cy * u1 - hh); }
+    c.stroke();
+    for (let i = 0; i < n; i++) {
+      const u = u0 + (i + 0.5) / n * (u1 - u0), x = cx * u, y = cy * u;
+      let h = 0.2 + this.hash(i, 61) * 0.035, tilt = 0;
+      if (dmg >= 1 && o.rnd() < (dmg === 1 ? 0.25 : 0.4)) { h *= 0.45; tilt = (o.rnd() - 0.5) * 0.08; }
+      const sw = 0.019, lit = (i % 3) !== 1;
+      this.poly(o, [x - sw, y, x + sw, y, x + sw + tilt, y - h, x + tilt, y - h - 0.035, x - sw + tilt, y - h], lit ? '#a77a48' : '#8a6238', 0.8);
+    }
+  },
+  // каменная стена: передняя грань с кладкой, верх, зубцы по обоим краям
+  stoneRun(o, cx, cy, u0, u1, level, dmg) {
+    const c = o.c, h = level === 3 ? 0.3 : 0.22, t = level === 3 ? 0.12 : 0.09;
+    let nx = -cy, ny = cx;
+    if (ny < 0 || (ny === 0 && nx < 0)) { nx = -nx; ny = -ny; }
+    const P = (u, w, z) => [cx * u + nx * w, cy * u + ny * w - z];
+    const base = level === 3 ? '#b9ae97' : '#c8bea8';
+    const lit = 0.84 + 0.18 * Math.abs(cx);
+    const B0 = P(u0, t / 2, 0), B1 = P(u1, t / 2, 0), B0h = P(u0, t / 2, h), B1h = P(u1, t / 2, h);
+    const A0h = P(u0, -t / 2, h), A1h = P(u1, -t / 2, h), A0 = P(u0, -t / 2, 0), A1 = P(u1, -t / 2, 0);
+    // тень и торцы
+    c.fillStyle = 'rgba(52,36,16,0.22)';
+    c.beginPath(); c.moveTo(B0[0] + 0.02, B0[1] + 0.01); c.lineTo(B1[0] + 0.02, B1[1] + 0.01); c.lineTo(B1[0] + 0.09, B1[1] + 0.05); c.lineTo(B0[0] + 0.09, B0[1] + 0.05); c.closePath(); c.fill();
+    for (const [p, q, ph, qh] of [[A0, B0, A0h, B0h], [A1, B1, A1h, B1h]]) this.poly(o, [p[0], p[1], q[0], q[1], qh[0], qh[1], ph[0], ph[1]], this.shade(base, 0.72), 0.6);
+    // зубцы по дальнему краю
+    const nm = Math.max(1, Math.round(Math.hypot(cx, cy) * (u1 - u0) / 0.09));
+    const merlon = (w, shade, k) => {
+      if (dmg >= 1 && this.hash(k * 13 + (w > 0 ? 7 : 0), 71 + dmg) < (dmg === 1 ? 0.35 : 0.5)) return;
+      const u = u0 + (k + 0.5) / nm * (u1 - u0), p = P(u, w, h);
+      this.poly(o, [p[0] - 0.024, p[1] + 0.006, p[0] + 0.024, p[1] + 0.006, p[0] + 0.024, p[1] - 0.045, p[0] - 0.024, p[1] - 0.045], this.shade(base, shade), 0.7);
+    };
+    for (let k = 0; k < nm; k++) merlon(-t / 2 + 0.012, 0.9, k);
+    // передняя грань с рядами кладки
+    if (Math.abs(cx) > 0.05) {
+      this.poly(o, [B0[0], B0[1], B1[0], B1[1], B1h[0], B1h[1], B0h[0], B0h[1]], this.shade(base, lit));
+      c.strokeStyle = 'rgba(80,64,44,0.35)'; c.lineWidth = o.lw * 0.8; c.beginPath();
+      for (let r = 1; r < 3; r++) { const z = h * r / 3; const p = P(u0, t / 2, z), q = P(u1, t / 2, z); c.moveTo(p[0], p[1]); c.lineTo(q[0], q[1]); }
+      const nj = Math.max(1, Math.round(Math.hypot(cx, cy) * (u1 - u0) / 0.11));
+      for (let r = 0; r < 3; r++) for (let j = 0; j < nj; j++) {
+        const u = u0 + (j + (r % 2 ? 0.5 : 0.1)) / nj * (u1 - u0), p = P(u, t / 2, h * r / 3), q = P(u, t / 2, h * (r + 1) / 3);
+        c.moveTo(p[0], p[1]); c.lineTo(q[0], q[1]);
+      }
+      c.stroke();
+      if (dmg >= 1) {
+        // трещины
+        c.strokeStyle = 'rgba(42,27,13,0.7)'; c.lineWidth = o.lw * 1.2; c.beginPath();
+        const p = P(u0 + (u1 - u0) * 0.4, t / 2, h * 0.9);
+        c.moveTo(p[0], p[1]); c.lineTo(p[0] + 0.03, p[1] + 0.06); c.lineTo(p[0] - 0.01, p[1] + 0.1); c.lineTo(p[0] + 0.02, p[1] + 0.15);
+        c.stroke();
+      }
+    }
+    // верх стены — ход по стене
+    this.poly(o, [A0h[0], A0h[1], A1h[0], A1h[1], B1h[0], B1h[1], B0h[0], B0h[1]], this.shade(base, 1.1));
+    for (let k = 0; k < nm; k++) merlon(t / 2 - 0.012, 1.0, k);
+    if (level === 3) {
+      // бойницы на передней грани
+      c.fillStyle = 'rgba(42,27,13,0.75)';
+      for (let k = 0; k < nm; k += 2) { const p = P(u0 + (k + 0.5) / nm * (u1 - u0), t / 2, h * 0.55); c.fillRect(p[0] - 0.008, p[1] - 0.03, 0.016, 0.05); }
+    }
+  },
+  rubble(o, x, y, level) {
+    const c = o.c;
+    for (let k = 0; k < 7; k++) {
+      const rx = x + (o.rnd() - 0.5) * 0.32, ry = y + (o.rnd() - 0.5) * 0.12, s = 0.025 + o.rnd() * 0.03;
+      if (level === 1) { c.beginPath(); c.moveTo(rx - s * 1.8, ry); c.lineTo(rx + s * 1.8, ry - s * 0.7); c.strokeStyle = '#7a5530'; c.lineWidth = 0.028; c.stroke(); }
+      else { c.beginPath(); c.ellipse(rx, ry, s * 1.2, s * 0.8, o.rnd(), 0, TAU); c.fillStyle = o.rnd() < 0.5 ? '#b3a993' : '#958b77'; c.fill(); this.ink(o, 0.7); }
+    }
+  },
+
+  port(ctx, x, y, size, kingdom, dir) {
+    const ppt = this.pptOf(ctx) * (size || 1) > 60 ? 96 : this.pptOf(ctx) * (size || 1) > 30 ? 48 : 24;
+    const col = kingdom && kingdom.color ? kingdom.color : NEUTRAL_COLOR;
+    const a = dir === undefined || dir === null ? Math.PI / 2 : dir;
+    // четыре стороны: восток, юг, запад, север
+    const q = ((Math.round(a / (Math.PI / 2)) % 4) + 4) % 4;
+    const key = 'port|' + q + '|' + ppt + '|' + col;
+    let s = this.wallSprites.get(key);
+    if (!s) s = this.rememberSprite(key, this.bakePort(q, col, ppt));
+    const k = size || 1;
+    ctx.drawImage(s.cv, x + s.x0 * k, y + s.y0 * k, s.w * k, s.h * k);
+  },
+  bakePort(q, col, ppt) {
+    const X0 = -1.45, X1 = 1.45, Y0 = -1.45, Y1 = 1.45;
+    const cv = document.createElement('canvas');
+    cv.width = Math.ceil((X1 - X0) * ppt); cv.height = Math.ceil((Y1 - Y0) * ppt);
+    const g = cv.getContext('2d');
+    g.setTransform(ppt, 0, 0, ppt, -X0 * ppt, -Y0 * ppt);
+    g.lineJoin = 'round'; g.lineCap = 'round';
+    const o = { c: g, px: 1 / ppt, lw: Math.max(1.1 / ppt, 0.012), col, dmg: 0, rnd: mulberry32(q * 31 + 5) };
+    const ux = [1, 0, -1, 0][q], uy = [0, 1, 0, -1][q], px = -uy, py = ux;
+    // на берег смотрит сторона, ближняя к зрителю
+    const side = py > 0 || (py === 0 && px > 0) ? 1 : -1;
+    const at = (s, w) => [ux * s + px * w * side, uy * s + py * w * side];
+    const items = [];
+    const add = (yy, fn) => items.push({ y: yy, fn });
+    // причал: сваи, толщина настила, доски
+    const L = 1.15, hw = 0.13, e = 0.05;
+    const corners = [at(0.0, -hw), at(L, -hw), at(L, hw), at(0.0, hw)];
+    const deckY = Math.max(corners[0][1], corners[1][1], corners[2][1], corners[3][1]);
+    add(deckY, () => {
+      const c = g;
+      // рябь у свай
+      c.strokeStyle = 'rgba(235,245,250,0.55)'; c.lineWidth = 0.015;
+      for (const s of [0.35, 0.7, 1.05]) for (const w of [-hw, hw]) {
+        const p = at(s, w);
+        c.beginPath(); c.ellipse(p[0], p[1] + e + 0.07, 0.05, 0.015, 0, 0, TAU); c.stroke();
+        this.poly(o, [p[0] - 0.018, p[1], p[0] + 0.018, p[1], p[0] + 0.018, p[1] + e + 0.07, p[0] - 0.018, p[1] + e + 0.07], '#5a3d20', 0.8);
+      }
+      const pts = [];
+      for (const p of corners) pts.push(p[0], p[1] + e);
+      this.poly(o, pts, '#6e4a28', 0.8);
+      const top = [];
+      for (const p of corners) top.push(p[0], p[1]);
+      this.poly(o, top, '#b48a55');
+      c.strokeStyle = 'rgba(90,60,30,0.6)'; c.lineWidth = o.lw * 0.9; c.beginPath();
+      for (let s = 0.07; s < L; s += 0.07) { const p = at(s, -hw), r = at(s, hw); c.moveTo(p[0], p[1]); c.lineTo(r[0], r[1]); }
+      c.stroke();
+      for (const w of [-hw, hw]) { const p = at(L - 0.04, w); c.fillStyle = '#4a3218'; c.beginPath(); c.ellipse(p[0], p[1] - 0.02, 0.022, 0.016, 0, 0, TAU); c.fill(); c.fillRect(p[0] - 0.02, p[1] - 0.02, 0.04, 0.03); }
+    });
+    // лодка у причала со стороны зрителя
+    const bp = at(0.68, hw + 0.2);
+    add(bp[1] + 0.05, () => {
+      const c = g, ang = Math.atan2(uy, ux);
+      c.save(); c.translate(bp[0], bp[1]); c.rotate(ang);
+      c.fillStyle = 'rgba(30,50,60,0.3)'; c.beginPath(); c.ellipse(0.02, 0.03, 0.3, 0.09, 0, 0, TAU); c.fill();
+      c.beginPath(); c.moveTo(-0.3, 0); c.quadraticCurveTo(-0.15, -0.11, 0.3, 0); c.quadraticCurveTo(-0.15, 0.11, -0.3, 0); c.closePath();
+      c.fillStyle = '#9a6d3e'; c.fill(); this.ink(o);
+      c.beginPath(); c.moveTo(-0.24, 0); c.quadraticCurveTo(-0.12, -0.07, 0.22, 0); c.quadraticCurveTo(-0.12, 0.07, -0.24, 0); c.closePath();
+      c.fillStyle = '#5e4128'; c.fill();
+      c.strokeStyle = '#b48a55'; c.lineWidth = 0.022; c.beginPath(); c.moveTo(-0.08, -0.06); c.lineTo(-0.08, 0.06); c.moveTo(0.08, -0.05); c.lineTo(0.08, 0.05); c.stroke();
+      c.restore();
+      // чалка к причалу
+      const m = at(0.68, hw);
+      c.strokeStyle = '#d9c79a'; c.lineWidth = 0.012; c.beginPath(); c.moveTo(m[0], m[1]); c.lineTo(bp[0] - ux * 0.05, bp[1] - uy * 0.05); c.stroke();
+    });
+    // склад на берегу, кран у начала причала, бочки и ящики, флаг на конце причала
+    const hp = at(-0.5, 0.05);
+    add(hp[1], () => this.drawHouse(o, hp[0], hp[1], { w: 0.46, d: 0.26, hw: 0.18, hr: 0.15, long: true, pal: 1, chim: false, plaster: 1, timber: true }));
+    const cp = at(0.05, -hw - 0.28);
+    add(cp[1], () => this.drawCrane(o, cp[0] - 0.05, cp[1]));
+    const sp = at(-0.12, hw + 0.3);
+    add(sp[1], () => {
+      const c = g;
+      this.poly(o, [sp[0] - 0.12, sp[1], sp[0] - 0.02, sp[1], sp[0] - 0.02, sp[1] - 0.09, sp[0] - 0.12, sp[1] - 0.09], '#a77c4a', 0.8);
+      for (const [bx, by] of [[0.04, 0.0], [0.11, 0.02], [0.075, -0.06]]) {
+        const X = sp[0] + bx, Y = sp[1] + by;
+        c.fillStyle = '#8a5a30'; c.fillRect(X - 0.032, Y - 0.07, 0.064, 0.07);
+        c.beginPath(); c.rect(X - 0.032, Y - 0.07, 0.064, 0.07); this.ink(o, 0.7);
+        c.fillStyle = '#c99d66'; c.beginPath(); c.ellipse(X, Y - 0.07, 0.032, 0.012, 0, 0, TAU); c.fill(); this.ink(o, 0.7);
+      }
+    });
+    const fp = at(L - 0.05, -hw + 0.03);
+    add(fp[1] + 0.001, () => this.pennant(o, fp[0], fp[1], 0.42));
+    items.sort((p, r) => p.y - r.y);
+    for (const it of items) it.fn();
+    return { cv, x0: X0, y0: Y0, w: X1 - X0, h: Y1 - Y0 };
+  },
+});
