@@ -79,6 +79,16 @@ while (g.time < total && g.winner === null) {
     console.log('  после загрузки 60 с: ok, кораблей', g2.naval.ships.length, 'армий', g2.armies.length);
   }
 }
+{
+  const bad = [];
+  for (const sh of g.naval.ships) {
+    if (sh.cargo && g.army(sh.cargo.id)) bad.push('cargo army also on map ' + sh.id);
+    if (sh.dock && !g.city(sh.dock)) bad.push('dangling dock ' + sh.id);
+    if (sh.job && !g.naval.jobs.some(j => j.id === sh.job)) bad.push('dangling job ' + sh.id);
+  }
+  for (const j of g.naval.jobs) if (!g.army(j.army) || !g.naval.ships.some(s => s.id === j.ship)) bad.push('stale job ' + j.id);
+  console.log('инварианты флота:', bad.length ? bad.join('; ') : 'ok');
+}
 console.log(log.slice(0, 40).join('\n'));
 console.log('итог:', JSON.stringify(stat), `${(g.time / 60).toFixed(1)} мин, ${((Date.now() - t0) / 1000).toFixed(1)} с, самый долгий шаг ${maxMs} мс`);
 for (const k of g.kingdoms) if (!k.bandit) console.log(' ', k.name.padEnd(22), 'городов', g.citiesOf(k.id).length, 'кораблей', g.naval.ships.filter(s => s.owner === k.id).length, k.alive ? '' : '[пало]');

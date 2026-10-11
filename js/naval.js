@@ -982,7 +982,14 @@ if (typeof document !== 'undefined') {
       offerState = { army: a.id, target: { ...target }, t: g.time };
       offerEl.innerHTML = `<span>${Icons.svg('ship')} Морем быстрее: ≈${fmtDur(o.seaT)} вместо ≈${fmtDur(o.landT)}</span>` +
         '<button type="button" class="act" data-nv="sea">Морем</button><button type="button" class="act ghost" data-nv="land">Пешком</button>';
+      // по центру свободной от панели части карты, правее миникарты и выше подсказки
+      const W = window.innerWidth, pn = $q('panel'), pr = pn && !pn.hidden ? pn.getBoundingClientRect() : null, pw = pr && pr.left > W * 0.35 ? W - pr.left : 0;
+      const mm = $q('minimap-wrap'), mr = mm ? mm.getBoundingClientRect() : null, hn = $q('hint');
+      offerEl.style.maxWidth = (W - pw - 16) + 'px';
       offerEl.hidden = false;
+      const half = offerEl.offsetWidth / 2, left = mr && mr.width && mr.top > window.innerHeight * 0.4 ? mr.right + 8 : 8;
+      offerEl.style.left = Math.max(left + half, Math.min((W - pw) / 2, W - pw - half - 8)) + 'px';
+      offerEl.style.bottom = (hn && !hn.hidden ? hn.offsetHeight + 22 : 14) + 'px';
     };
 
     // ---------- касания ----------
@@ -1103,6 +1110,9 @@ if (typeof document !== 'undefined') {
     }
     function cardFor(g, sh) {
       const sp = SPECS[sh.kind], k = g.kingdom(sh.owner), mine = sh.owner === g.player.id;
+      // пока выбирают, куда плыть, карточка сжимается: карта остаётся открытой для касания
+      if (tool && mine) return `<div class="nv-h">${portrait(g, sh.kind, sh.owner, 34)}<div><b>${sp.name}</b><span>Коснитесь воды или берега</span></div>` +
+        `<button type="button" class="act on" data-nv="sail" style="margin-left:auto;min-height:34px;padding:4px 12px">Отмена</button></div>`;
       const pct = Math.max(0, Math.min(100, sh.hp / sp.hp * 100));
       let h = `<div class="nv-h">${portrait(g, sh.kind, sh.owner, 44)}<div><b>${sp.name}</b><span>${escapeHtml(shipStatus(g, sh))}</span></div>` +
         `<button type="button" class="nv-x" data-nv="close" aria-label="Закрыть">${Icons.svg('close')}</button></div>`;
