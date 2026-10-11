@@ -725,6 +725,11 @@ const Fronts = {
       cities.push(c);
     }
     if (!cities.length && f.kind === 'border') for (const c of g.cities) if (enemyCity(c)) cities.push(c);
+    // ИИ бьёт в выбранную им цель, даже если она дальше досягаемости от линии
+    if (isAI) {
+      const ak = g.kingdom(f.owner), tg = ak && ak.ai && ak.ai.target !== null && ak.ai.target !== undefined ? g.city(ak.ai.target) : null;
+      if (tg && enemyCity(tg)) cities = [tg];
+    }
     const need = c => {
       const def = AI.cityDefense(g, c);
       if (!isAI) return def * DIV.playerNeed;
