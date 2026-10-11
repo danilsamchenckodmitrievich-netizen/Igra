@@ -328,11 +328,13 @@ class World {
     return -1;
   }
 
-  // Путь армии в клетках; возвращает массив точек-центров клеток.
-  findPath(sx, sy, tx, ty) {
+  // Путь армии в клетках; возвращает массив точек-центров клеток. owner — чья армия: модуль стен
+  // (world.pathPenalty) накидывает штраф на шаг через вражескую стену, и путь идёт в обход, если обход короче.
+  findPath(sx, sy, tx, ty, owner) {
     const s = this.nearestPassable(sx, sy), t = this.nearestPassable(tx, ty);
     if (s < 0 || t < 0) return null;
-    const path = this.astar(s, t, i => this.moveCost(i), ROAD_MULT, 60000);
+    const pen = owner !== undefined && this.pathPenalty;
+    const path = this.astar(s, t, pen ? i => this.moveCost(i) + pen(i, owner) : i => this.moveCost(i), ROAD_MULT, 60000);
     if (!path) return null;
     const W = this.W;
     return path.map(k => ({ x: k % W + 0.5, y: Math.floor(k / W) + 0.5 }));

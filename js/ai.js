@@ -63,7 +63,7 @@ const AI = {
     this.trade(g, k, ctx);
     const armyPower = this.totalPower(g, k);
     const wantArmy = this.wantedPower(g, k);
-    const saving = armyPower < wantArmy * 0.6 && g.time > 120;
+    const saving = (armyPower < wantArmy * 0.6 && g.time > 120) || (typeof Founding !== 'undefined' && Founding.aiSaves(g, k));
     for (const c of ctx.cities) {
       if (c.construction || c.siegeBy) continue;
       const choice = this.pickBuild(g, k, c, inc, ctx);
@@ -128,6 +128,7 @@ const AI = {
   recruit(g, k, ctx) {
     const want = this.wantedPower(g, k) * (ctx.threats.length ? 1.4 : 1);
     if (this.totalPower(g, k) >= want) return;
+    if (typeof Founding !== 'undefined' && Founding.aiSaves(g, k)) return;
     if (ctx.inc.food < -4 || ctx.inc.gold < -6) return;
     const cities = ctx.cities.filter(c => !c.siegeBy && c.queue.length < 2).sort((a, b) => (b.isCapital - a.isCapital) || b.level - a.level);
     for (const c of cities) {
