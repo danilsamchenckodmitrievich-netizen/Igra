@@ -390,8 +390,9 @@ class UI {
       ['army', 'Войска', 'swords', c.queue.length ? `<span class="badge" title="В очереди найма">${c.queue.length}</span>` : ''],
     ];
     for (const s of UIExt.citySections) if (!s.when || s.when(g, c)) tabs.push([s.id, s.title, s.icon || 'flag', '']);
-    h += '<div class="tabs ctabs" data-key="tabs" role="tablist">' + tabs.map(([v, n, ic, extra]) =>
-      `<button type="button" role="tab" aria-selected="${this.cityTab === v}" data-act="tab" data-v="${v}" class="${this.cityTab === v ? 'on' : ''}">${Icons.svg(ic)}<span class="tl">${n}</span>${extra}</button>`).join('') + '</div>';
+    // много вкладок (модули добавляют свои) — у неактивных остаются только значки
+    h += `<div class="tabs ctabs${tabs.length > 3 ? ' many' : ''}" data-key="tabs" role="tablist">` + tabs.map(([v, n, ic, extra]) =>
+      `<button type="button" role="tab" title="${n}" aria-label="${n}" aria-selected="${this.cityTab === v}" data-act="tab" data-v="${v}" class="${this.cityTab === v ? 'on' : ''}">${Icons.svg(ic)}<span class="tl">${n}</span>${extra}</button>`).join('') + '</div>';
     if (cons) h += this.bannerHtml(c, pl);
     const ext = UIExt.citySections.find(s => s.id === this.cityTab);
     if (this.cityTab === 'eco') h += this.ecoHtml(c, pl);

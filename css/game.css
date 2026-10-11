@@ -217,10 +217,14 @@ button:focus-visible { outline: 2px solid var(--gold-hi); outline-offset: 2px; }
 .tabs button.on { background: linear-gradient(#fffaf0, var(--paper)); border-color: var(--line); color: var(--ink); border-bottom: 2px solid var(--paper); }
 .tabs button.on::before { content: ''; position: absolute; left: 10px; right: 10px; top: -1px; height: 3px; border-radius: 0 0 3px 3px; background: var(--gold); }
 .ctabs button { flex: 1 1 0; padding: 6px 8px; min-width: 0; }
+.ctabs.many button { flex: 0 0 auto; }
+.ctabs.many button.on { flex: 1 1 auto; }
+.ctabs.many button:not(.on) .tl { display: none; }
 .tabs .tl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tabs .dot, .tabs .badge, .tabs .ico { flex: none; }
 #panel.stuck .tabs { padding-right: 56px; }
 #panel.stuck .ctabs .ico { display: none; }
+#panel.stuck .ctabs.many button:not(.on) .ico { display: inline-block; }
 /* точка «идёт стройка» в углу ярлычка, чтобы не отнимать место у названия */
 .tabs .dot { position: absolute; top: 9px; right: 7px; width: 8px; height: 8px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 0 2px rgba(215, 169, 68, 0.3); }
 .tabs .badge {
