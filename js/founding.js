@@ -1092,6 +1092,74 @@ if (typeof document !== 'undefined') (function () {
     return (fd.om = { key, a, cv: null });
   }
 
+  // Кэш стоящих стен. Стена в кадре — десятки кусков по 4 операции рисования, и на холсте это упирается в предел
+  // отложенной растеризации (кадр уходит за бюджет). Поэтому стены участка 8×8 клеток один раз рисуются в свой холст
+  // (только по габариту стен, в ступени разрешения спрайтов) и дальше кладутся одним drawImage.
+  const WC = { n: 8, budget: 8e6, fd: null, map: new Map(), px: 0, frame: 0, chunks: null, chunksVer: -1 };
+  const dmgBucket = q => { const d = 1 - q.hp / Founding.wallMax(q, q.l); return d >= 0.75 ? 0.9 : d >= 0.35 ? 0.5 : 0; };
+  function chunkLists(fd, W) {
+    if (WC.chunks && WC.chunksVer === fd.ver) return WC.chunks;
+    const m = new Map(), N = WC.n;
+    for (const i of fd.sorted) { const y = Math.floor(i / W), k = Math.floor(y / N) * 4096 + Math.floor((i - y * W) / N); const a = m.get(k); if (a) a.push(i); else m.set(k, [i]); }
+    WC.chunksVer = fd.ver;
+    return (WC.chunks = m);
+  }
+  // Нарисовать стоящие стены клетками [x0..x1]×[y0..y1]; false — не уместились в бюджет памяти, рисуем напрямую.
+  function drawChunks(ctx, g, fd, W, x0, x1, y0, y1) {
+    const m = ctx.getTransform ? ctx.getTransform() : null, sc = m ? Math.hypot(m.a, m.b) : 48;
+    const P = sc <= 30 ? 24 : sc <= 60 ? 48 : 96, N = WC.n;
+    if (WC.fd !== fd) { WC.fd = fd; WC.map.clear(); WC.px = 0; WC.chunks = null; }
+    const lists = chunkLists(fd, W);
+    const fr = ++WC.frame;
+    if (fr % 300 === 0) for (const [k, e] of WC.map) if (e.used < fr - 300) { WC.px -= e.cv.width * e.cv.height; WC.map.delete(k); }
+    const lvOf = i => { const q = fd.walls.get(i); return q ? q.l : 0; };
+    const kOf = i => g.kingdom(fd.walls.get(i).o), dmOf = i => dmgBucket(fd.walls.get(i));
+    const direct = [];
+    for (let by = Math.floor(y0 / N); by <= Math.floor(y1 / N); by++) for (let bx = Math.floor(x0 / N); bx <= Math.floor(x1 / N); bx++) {
+      const key = by * 4096 + bx, list = lists.get(key);
+      if (!list) continue;
+      let sig = list.length, mnx = 1e9, mny = 1e9, mxx = -1, mxy = -1;
+      for (const i of list) {
+        const q = fd.walls.get(i);
+        if (!q || q.l <= 0) continue;
+        const y = Math.floor(i / W), x = i - y * W;
+        if (x < mnx) mnx = x; if (x > mxx) mxx = x; if (y < mny) mny = y; if (y > mxy) mxy = y;
+        sig = (Math.imul(sig, 31) + i * 7 + q.l * 3 + (dmgBucket(q) * 10 | 0) + (q.gate ? 11 : 0) + q.o * 131) | 0;
+      }
+      if (mxx < 0) continue;
+      let e = WC.map.get(key);
+      if (!e || e.sig !== sig || e.P !== P) {
+        const ox = mnx - 1, oy = mny - 1, cw = mxx - mnx + 3, ch = mxy - mny + 3, need = cw * ch * P * P;
+        if (e) { WC.px -= e.cv.width * e.cv.height; WC.map.delete(key); }
+        if (WC.px + need > WC.budget) {
+          for (const [k2, e2] of WC.map) { if (e2.used >= fr - 1) continue; WC.px -= e2.cv.width * e2.cv.height; WC.map.delete(k2); if (WC.px + need <= WC.budget) break; }
+        }
+        if (WC.px + need > WC.budget) { direct.push(list); continue; }
+        const cv = e ? e.cv : document.createElement('canvas');
+        cv.width = cw * P; cv.height = ch * P;
+        const c = cv.getContext('2d');
+        c.setTransform(P, 0, 0, P, -ox * P, -oy * P);
+        c.imageSmoothingEnabled = true;
+        // куски в кэш должны попасть настоящими, а не запасной линией: лимит запекания на кадр на время отключаем
+        const bk = typeof WorldArt !== 'undefined' ? WorldArt.wallBake : null, keep = bk ? bk.n : 0;
+        if (bk) bk.n = -1e6;
+        drawSet(c, W, list, lvOf, kOf, dmOf);
+        for (const i of list) { const q = fd.walls.get(i); if (q.l > 0 && q.gate) drawGate(c, i % W + 0.5, Math.floor(i / W) + 0.5, q.l); }
+        if (bk) bk.n = keep;
+        WC.px += cv.width * cv.height;
+        e = { cv, sig, P, ox, oy, cw, ch, used: fr };
+        WC.map.set(key, e);
+      }
+      e.used = fr;
+      ctx.drawImage(e.cv, e.ox, e.oy, e.cw, e.ch);
+    }
+    // не поместившиеся участки — по-старому, кусками (снизу вверх порядок сохраняется в drawSet)
+    for (const list of direct) {
+      drawSet(ctx, W, list, lvOf, kOf, dmOf);
+      for (const i of list) { const q = fd.walls.get(i); if (q.l > 0 && q.gate) drawGate(ctx, i % W + 0.5, Math.floor(i / W) + 0.5, q.l); }
+    }
+  }
+
   RenderExt.map.push((ctx, r, z, tl, br) => {
     const g = r.g;
     if (!g || !g.fd) return;
@@ -1110,14 +1178,14 @@ if (typeof document !== 'undefined') (function () {
     // стены, леса, обломки (сверху вниз)
     if (fd.walls.size || fd.rubble.size) {
       if (!fd.sorted || fd.sortedVer !== fd.ver) { fd.sorted = [...fd.walls.keys()].sort((a, b) => a - b); fd.sortedVer = fd.ver; }
-      const vis = [];
-      for (const i of fd.sorted) { const y = Math.floor(i / W), x = i - y * W; if (x >= x0 && x <= x1 && y >= y0 && y <= y1) vis.push(i); }
-      const lvOf = i => { const q = fd.walls.get(i); return q ? q.l : 0; };
-      drawSet(ctx, W, vis, lvOf, i => g.kingdom(fd.walls.get(i).o), i => { const q = fd.walls.get(i); return 1 - q.hp / Founding.wallMax(q, q.l); });
-      for (const i of vis) {
-        const q = fd.walls.get(i), x = i % W, y = (i - x) / W;
-        if (q.l > 0 && q.gate) drawGate(ctx, x + 0.5, y + 0.5, q.l);
-        if (q.t > q.l) drawScaffold(ctx, x + 0.5, y + 0.5, q.p, q.t, g.kingdom(q.o));
+      if (fd.walls.size) {
+        drawChunks(ctx, g, fd, W, x0, x1, y0, y1);
+        // леса недостроенных участков (меняются каждый кадр) — поверх, вживую
+        for (const [i, q] of fd.walls) {
+          if (q.t <= q.l) continue;
+          const x = i % W, y = (i - x) / W;
+          if (x >= x0 && x <= x1 && y >= y0 && y <= y1) drawScaffold(ctx, x + 0.5, y + 0.5, q.p, q.t, g.kingdom(q.o));
+        }
       }
       for (const [i] of fd.rubble) {
         const y = Math.floor(i / W), x = i - y * W;
@@ -1126,9 +1194,11 @@ if (typeof document !== 'undefined') (function () {
     }
     // задуманная стена: прозрачный образ нужного уровня
     if (ui.mode === 'wall' && ui.cells.size) {
-      const cells = [...ui.cells].sort((a, b) => a - b);
+      const cells = [...ui.cells].filter(i => { const y = Math.floor(i / W), x = i - y * W; return x >= x0 && x <= x1 && y >= y0 && y <= y1; }).sort((a, b) => a - b);
       ctx.fillStyle = 'rgba(255,214,102,.5)'; ctx.strokeStyle = 'rgba(120,80,10,.9)'; ctx.lineWidth = 0.05;
-      for (const i of cells) { const x = i % W, y = (i - x) / W; ctx.fillRect(x + 0.08, y + 0.08, 0.84, 0.84); ctx.strokeRect(x + 0.08, y + 0.08, 0.84, 0.84); }
+      ctx.beginPath();
+      for (const i of cells) { const x = i % W, y = (i - x) / W; ctx.rect(x + 0.08, y + 0.08, 0.84, 0.84); }
+      ctx.fill(); ctx.stroke();
       ctx.globalAlpha = 0.72;
       const pk = g.player;
       drawSet(ctx, W, cells, i => ui.cells.has(i) ? ui.level : 0, () => pk, () => 0);
